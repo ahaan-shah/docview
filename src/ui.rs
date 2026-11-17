@@ -403,7 +403,7 @@ pub fn prompt(modal: &Rc<Modal>, message: &str, password: bool, on_submit: Rc<dy
 }
 
 /// Keyboard shortcut cheat sheet: sections of (label, "Ctrl+X or Y").
-pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, note: &str) -> gtk::Box {
+pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, note: &str, max_h: i32) -> gtk::Box {
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     panel.add_css_class("shortcuts");
     panel.set_size_request(760, -1);
@@ -414,7 +414,7 @@ pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, not
     let scroller = gtk::ScrolledWindow::new();
     scroller.set_hscrollbar_policy(gtk::PolicyType::Never);
     scroller.set_propagate_natural_height(true);
-    scroller.set_max_content_height(560);
+    scroller.set_max_content_height(max_h.clamp(160, 560));
     let cols = gtk::Box::new(gtk::Orientation::Horizontal, 32);
     cols.set_homogeneous(true);
     let left = gtk::Box::new(gtk::Orientation::Vertical, 0);

@@ -74,7 +74,7 @@ pub const COMMANDS: &[Command] = &[
     c("find-prev", "Find previous", &["Shift+F3", "Ctrl+Shift+Enter"], None, "Text"),
     c("copy", "Copy selection", &["Ctrl+C"], Some("copy"), "Text"),
     c("select-all", "Select all text on the page", &["Ctrl+A"], None, "Text"),
-    c("highlight", "Highlight selection (or current match)", &["Ctrl+H", "Shift+H"], Some("highlight"), "Text"),
+    c("highlight", "Highlight selection or match", &["Ctrl+H", "Shift+H"], Some("highlight"), "Text"),
     c("unhighlight", "Remove highlight", &["Delete", "Shift+Delete"], None, "Text"),
     c("highlight-color", "Highlight color…", &[], None, "Text"),
     c("undo", "Undo highlight change", &["Ctrl+Z"], None, "Text"),

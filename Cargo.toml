@@ -7,8 +7,8 @@ license = "MIT"
 repository = "https://github.com/ahaan-shah/docview"
 
 [dependencies]
-gtk = { package = "gtk4", version = "0.11", features = ["v4_16"] }
-poppler = { package = "poppler-rs", version = "0.26", features = ["v25_10"] }
+gtk = { package = "gtk4", version = "0.11", features = ["v4_12"] }
+poppler = { package = "poppler-rs", version = "0.26" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.9"
@@ -26,3 +26,25 @@ panic = "abort"
 [dev-dependencies]
 pangocairo = "0.22"
 cairo-rs = { version = "0.22", features = ["pdf", "v1_18"] }
+
+# .deb (cargo-deb) and .rpm (cargo-generate-rpm) packages, built by the release workflow.
+[package.metadata.deb]
+maintainer = "Ahaan Shah"
+section = "graphics"
+depends = "libgtk-4-1 (>= 4.12), libpoppler-glib8"
+extended-description = "Minimal PDF viewer with tiled background rendering, text selection, highlights saved into the PDF, search, dual and continuous layouts, night mode and full keyboard control. Follows your pywal palette."
+assets = [
+  ["target/release/docview", "usr/bin/", "755"],
+  ["packaging/docview.desktop", "usr/share/applications/", "644"],
+  ["logos/pdf-viewer-blue.svg", "usr/share/icons/hicolor/scalable/apps/docview.svg", "644"],
+]
+
+[package.metadata.generate-rpm]
+assets = [
+  { source = "target/release/docview", dest = "/usr/bin/docview", mode = "755" },
+  { source = "packaging/docview.desktop", dest = "/usr/share/applications/docview.desktop", mode = "644" },
+  { source = "logos/pdf-viewer-blue.svg", dest = "/usr/share/icons/hicolor/scalable/apps/docview.svg", mode = "644" },
+]
+[package.metadata.generate-rpm.requires]
+gtk4 = ">= 4.12"
+poppler-glib = "*"

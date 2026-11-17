@@ -772,6 +772,7 @@ impl App {
     }
 
     fn refresh(&self) {
+        self.responsive();
         let doc = self.view.doc();
         let has = doc.is_some();
         match &doc {
@@ -1379,7 +1380,9 @@ impl App {
             "Change any binding in {} under [keys], e.g. highlight = \"Ctrl+H\". Several keys: \"H, Ctrl+H\".",
             config::path().map(|p| home_short(&p)).unwrap_or_default()
         );
-        let panel = ui::shortcuts_panel(sections, &note);
+        // Leave room for the panel's top offset, title and note.
+        let max_h = (self.window.height() as f64 * 0.88) as i32 - 150;
+        let panel = ui::shortcuts_panel(sections, &note, max_h);
         drop(km);
         self.modal.open(&panel, None);
         panel.grab_focus();

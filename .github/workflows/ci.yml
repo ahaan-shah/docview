@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libpoppler-glib-dev
+      - run: cargo test --release
+      - run: cargo build --release
+      # Smoke test: the generated sample PDF must parse with the same engine.
+      - run: cargo run --release --example make_sample -- /tmp/sample.pdf 3

@@ -1,0 +1,23 @@
+# Local build from this working tree: run `makepkg -si` inside packaging/.
+pkgname=docview
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Minimal, low-memory PDF viewer"
+arch=('x86_64' 'aarch64')
+license=('MIT')
+depends=('gtk4' 'poppler-glib')
+makedepends=('cargo')
+optdepends=('python-pywal: live system palette' 'xdg-desktop-portal: file dialogs and light/dark preference')
+options=('!lto')
+
+build() {
+  cd "$startdir/.."
+  cargo build --release --locked
+}
+
+package() {
+  cd "$startdir/.."
+  install -Dm755 target/release/docview "$pkgdir/usr/bin/docview"
+  install -Dm644 packaging/docview.desktop "$pkgdir/usr/share/applications/docview.desktop"
+  install -Dm644 logos/pdf-viewer-blue.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/docview.svg"
+}

@@ -1121,6 +1121,9 @@ impl DocView {
     }
 
     fn on_rendered(&self, r: Rendered) {
+        if std::env::var_os("DOCVIEW_DEBUG").is_some() && self.sr().tiles.is_empty() {
+            eprintln!("first tile after {:?}", crate::START.get().map(|s| s.elapsed()));
+        }
         {
             let mut st = self.st();
             if r.generation != st.generation {

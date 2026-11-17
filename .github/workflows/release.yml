@@ -1,0 +1,77 @@
+name: Release
+
+# Push a tag like v0.1.0 to build and publish a release.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 24.04 sets the baseline (glibc 2.39, GTK 4.14), so the binaries run on
+          # current Arch, Fedora, Debian 13 and Ubuntu 24.04+.
+          - os: ubuntu-24.04
+            arch: x86_64
+          - os: ubuntu-24.04-arm
+            arch: aarch64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: System libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-4-dev libpoppler-glib-dev
+      - run: cargo test --release
+      - run: cargo build --release
+      - run: cargo install cargo-deb cargo-generate-rpm
+      - run: cargo deb --no-build
+      - run: cargo generate-rpm
+
+      - name: Package
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          name="docview-${tag}-${{ matrix.arch }}-linux"
+          mkdir -p "out/$name"
+          cp target/release/docview "out/$name/"
+          cp packaging/docview.desktop README.md LICENSE "out/$name/"
+          cp logos/pdf-viewer-blue.svg "out/$name/docview.svg"
+          tar -C out -czf "out/$name.tar.gz" "$name"
+          cp target/debian/*.deb out/
+          cp target/generate-rpm/*.rpm out/
+          ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.arch }}
+          path: |
+            out/*.tar.gz
+            out/*.deb
+            out/*.rpm
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: files
+          merge-multiple: true
+      - name: Checksums
+        run: cd files && sha256sum * > checksums.txt && cat checksums.txt
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          gh release create "$tag" files/* --repo "$GITHUB_REPOSITORY" \
+            --title "docview ${tag}" --generate-notes

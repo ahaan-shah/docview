@@ -57,7 +57,10 @@ pub fn trim_heap() {
     }
 }
 
+pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+
 fn main() -> glib::ExitCode {
+    START.get_or_init(std::time::Instant::now);
     lean_env();
     let gapp = gtk::Application::builder()
         .application_id(APP_ID)
@@ -161,7 +164,9 @@ fn capture(a: &Rc<app::App>) -> Option<gtk::gdk::Texture> {
     if let Some(c) = a.window_bg() {
         snap.append_color(&c, &gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
     }
+    snap.push_clip(&gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
     a.window.snapshot_child(&child, &snap);
+    snap.pop();
     let node = snap.to_node()?;
     Some(a.window.renderer()?.render_texture(&node, None))
 }

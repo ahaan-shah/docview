@@ -569,6 +569,13 @@ impl App {
         }
     }
 
+    /// Top-bar buttons that show as active, for the dev hooks.
+    pub fn active_buttons(&self) -> Vec<&'static str> {
+        let mut v: Vec<&'static str> = self.buttons.iter().filter(|(_, b)| b.has_css_class("active")).map(|(id, _)| *id).collect();
+        v.sort();
+        v
+    }
+
     /// Theme background, for the snapshot dev hook.
     pub fn window_bg(&self) -> Option<gdk::RGBA> {
         let c = self.palette.borrow().bg;
@@ -783,7 +790,7 @@ impl App {
             _ => false,
         };
         for (id, b) in &self.buttons {
-            if active(id) { b.add_css_class("active") } else { b.remove_css_class("active") }
+            if has && active(id) { b.add_css_class("active") } else { b.remove_css_class("active") }
         }
         if let Some(b) = self.buttons.get("back") {
             b.set_sensitive(self.view.can_go_back());
@@ -1238,7 +1245,7 @@ impl App {
         for c in COMMANDS.iter().filter(|c| !c.hidden) {
             let w = Rc::downgrade(self);
             let id = c.id;
-            items.push(Item::new(c.label, km.first_key(c), move || {
+            items.push(Item::command(c.label, km.first_key(c), move || {
                 if let Some(a) = w.upgrade() {
                     a.run(id);
                 }
@@ -1273,10 +1280,11 @@ impl App {
         }
         let mouse = vec![
             ("Select text".to_string(), "Drag".to_string()),
-            ("Select word / line".to_string(), "Double+click or Triple+click".to_string()),
-            ("Extend selection".to_string(), "Shift+click".to_string()),
+            ("Select word / line".to_string(), "Double-click or Triple-click".to_string()),
+            ("Extend selection".to_string(), "Shift+Click".to_string()),
             ("Zoom".to_string(), "Ctrl+Wheel or Pinch".to_string()),
-            ("Pan".to_string(), "Middle+drag".to_string()),
+            ("Pan".to_string(), "Middle-drag".to_string()),
+            ("Follow a link".to_string(), "Click".to_string()),
         ];
         sections.push(("Mouse", mouse));
         let note = format!(

@@ -261,7 +261,9 @@ fn bounds(batch: &[(u32, u32)], extra: (u32, u32)) -> (u32, u32, u32, u32) {
 
 /// Render the device-pixel rectangle (x, y, w, h) of a page at `scale` into packed BGRA rows.
 fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolor: Option<Recolor>) -> Option<Vec<u8>> {
-    let mut surface = cairo::ImageSurface::create(cairo::Format::Rgb24, w, h).ok()?;
+    // ARGB32 painted opaque white: exactly GDK's default memory format, so GTK can draw
+    // the bytes without converting them.
+    let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
     {
         let cr = cairo::Context::new(&surface).ok()?;
         cr.set_source_rgb(1.0, 1.0, 1.0);
@@ -285,7 +287,7 @@ fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolo
 }
 
 /// Lightness inversion between the theme's background and foreground. Hue offsets from gray
-/// are kept so colored figures stay distinguishable. Bytes are B, G, R, X.
+/// are kept so colored figures stay distinguishable. Bytes are B, G, R, A (opaque).
 pub fn apply_recolor(px: &mut [u8], rc: Recolor) {
     let (bg, fg) = (rc.bg, rc.fg);
     for p in px.chunks_exact_mut(4) {

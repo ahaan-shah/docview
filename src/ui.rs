@@ -9,12 +9,17 @@ use std::rc::Rc;
 pub struct Item {
     pub label: String,
     pub hint: Option<String>,
+    /// The hint is a key combo (drawn as key caps) rather than plain text.
+    pub is_key: bool,
     pub run: Rc<dyn Fn()>,
 }
 
 impl Item {
     pub fn new(label: impl Into<String>, hint: Option<String>, run: impl Fn() + 'static) -> Item {
-        Item { label: label.into(), hint, run: Rc::new(run) }
+        Item { label: label.into(), hint, is_key: false, run: Rc::new(run) }
+    }
+    pub fn command(label: impl Into<String>, keys: Option<String>, run: impl Fn() + 'static) -> Item {
+        Item { label: label.into(), hint: keys, is_key: true, run: Rc::new(run) }
     }
 }
 
@@ -98,8 +103,15 @@ impl Modal {
     pub fn open(&self, panel: &impl IsA<gtk::Widget>, on_close: Option<Box<dyn Fn()>>) {
         self.close();
         let panel = panel.as_ref().clone();
+        // Never wider than the window (a size request wider than the overlay spills out).
+        let win_w = self.scrim.root().map(|r| r.width()).unwrap_or(1000);
+        let (req_w, req_h) = panel.size_request();
+        if req_w > win_w - 32 {
+            panel.set_size_request((win_w - 32).max(200), req_h);
+        }
         panel.set_halign(gtk::Align::Center);
         panel.set_valign(gtk::Align::Start);
+        panel.set_overflow(gtk::Overflow::Hidden);
         let h = self.scrim.root().map(|r| r.height()).unwrap_or(700);
         panel.set_margin_top((h as f64 * 0.12) as i32);
         self.scrim.append(&panel);
@@ -131,6 +143,7 @@ fn keys_row(keys: &str) -> gtk::Box {
             or.add_css_class("or");
             row.append(&or);
         }
+        // "Ctrl+Wheel" is two caps; "Double-click" is one.
         for part in combo.split('+') {
             let k = gtk::Label::new(Some(&pretty_key(part)));
             k.add_css_class("kbd");
@@ -200,7 +213,7 @@ pub fn open_picker(modal: &Rc<Modal>, items: Vec<Item>, placeholder: &str, free:
                 row.append(&l);
                 if let Some(h) = &it.hint {
                     let k = gtk::Label::new(Some(h));
-                    k.add_css_class(if h.contains('+') || h.len() <= 3 { "kbd" } else { "hint" });
+                    k.add_css_class(if it.is_key { "kbd" } else { "hint" });
                     row.append(&k);
                 }
                 list.append(&row);
@@ -439,6 +452,7 @@ pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, not
     n.add_css_class("settings-note");
     n.set_xalign(0.0);
     n.set_wrap(true);
+    n.set_max_width_chars(60);
     panel.append(&n);
     panel.set_focusable(true);
     panel

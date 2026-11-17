@@ -214,6 +214,7 @@ mod imp {
         pub listener: RefCell<Option<Rc<dyn Fn(Change)>>>,
         pub find_gen: Arc<AtomicU64>,
         pub adj_handlers: RefCell<Vec<(gtk::Adjustment, glib::SignalHandlerId)>>,
+        pub trim_timer: RefCell<Option<glib::SourceId>>,
     }
 
     impl Default for DocView {
@@ -228,6 +229,7 @@ mod imp {
                 listener: RefCell::new(None),
                 find_gen: Arc::new(AtomicU64::new(0)),
                 adj_handlers: RefCell::new(Vec::new()),
+                trim_timer: RefCell::new(None),
             }
         }
     }
@@ -1040,6 +1042,21 @@ impl DocView {
         }
     }
 
+    /// Once rendering goes quiet, return freed memory to the system. One-shot, not a poll.
+    fn schedule_trim(&self) {
+        if let Some(t) = self.imp().trim_timer.take() {
+            t.remove();
+        }
+        let weak = self.downgrade();
+        let id = glib::timeout_add_local_once(std::time::Duration::from_millis(1500), move || {
+            if let Some(v) = weak.upgrade() {
+                v.imp().trim_timer.take();
+                crate::trim_heap();
+            }
+        });
+        self.imp().trim_timer.replace(Some(id));
+    }
+
     fn on_rendered(&self, r: Rendered) {
         {
             let mut st = self.st();
@@ -1048,7 +1065,7 @@ impl DocView {
             }
             let bytes = r.data.len();
             let gbytes = glib::Bytes::from_owned(r.data);
-            let tex = gdk::MemoryTexture::new(r.w, r.h, gdk::MemoryFormat::B8g8r8x8, &gbytes, r.w as usize * 4);
+            let tex = gdk::MemoryTexture::new(r.w, r.h, gdk::MemoryFormat::B8g8r8a8Premultiplied, &gbytes, r.w as usize * 4);
             let frame = st.frame;
             let generation = st.generation;
             if let Some(old) = st.tiles.insert(r.key, Tile { tex: tex.upcast(), bytes, used: frame, generation }) {
@@ -1071,6 +1088,7 @@ impl DocView {
             }
         }
         self.queue_draw();
+        self.schedule_trim();
     }
 
     /// Memory held by rendered tiles, for the status bar in debug builds and tests.
@@ -1559,6 +1577,7 @@ impl DocView {
             let n = st.find.per_page.len();
             if st.find.searched >= n {
                 st.find.running = false;
+                crate::trim_heap();
             }
             let first = st.find.current.is_none() && !rects.is_empty();
             if page < n {

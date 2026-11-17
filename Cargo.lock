@@ -103,6 +103,7 @@ dependencies = [
  "cairo-rs",
  "dirs",
  "gtk4",
+ "libc",
  "pangocairo",
  "poppler-rs",
  "serde",

@@ -40,10 +40,20 @@ fn lean_env() {
         if std::env::var_os("GTK_A11Y").is_none() && std::env::var_os("DOCVIEW_A11Y").is_none() {
             std::env::set_var("GTK_A11Y", "none");
         }
-        // glibc keeps freed tile memory in per-thread arenas; two is plenty here.
-        if std::env::var_os("MALLOC_ARENA_MAX").is_none() {
-            std::env::set_var("MALLOC_ARENA_MAX", "2");
-        }
+    }
+    // glibc gives every thread that allocates its own arena and keeps freed tile memory in
+    // them. Two arenas are plenty (the env var would be read too late, so set it directly).
+    #[cfg(target_env = "gnu")]
+    unsafe {
+        libc::mallopt(libc::M_ARENA_MAX, 2);
+    }
+}
+
+/// Hand freed heap memory back to the system (after a burst of tile rendering or a search).
+pub fn trim_heap() {
+    #[cfg(target_env = "gnu")]
+    unsafe {
+        libc::malloc_trim(0);
     }
 }
 
@@ -65,6 +75,12 @@ fn main() -> glib::ExitCode {
 }
 
 fn start(app: &Rc<app::App>, file: Option<std::path::PathBuf>) {
+    if let Some((w, h)) = std::env::var("DOCVIEW_SIZE").ok().and_then(|s| {
+        let (w, h) = s.split_once('x')?;
+        Some((w.parse().ok()?, h.parse().ok()?))
+    }) {
+        app.window.set_default_size(w, h);
+    }
     app.window.present();
     if let Some(p) = file {
         app.open_path(&p, None);
@@ -79,53 +95,67 @@ fn dev_hooks(app: &Rc<app::App>) {
     let delay: u64 = std::env::var("DOCVIEW_SNAPSHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
     if let Ok(cmds) = std::env::var("DOCVIEW_RUN") {
         let a = app.clone();
-        glib::timeout_add_local_once(std::time::Duration::from_millis(delay / 2), move || {
+        glib::spawn_future_local(async move {
+            glib::timeout_future(std::time::Duration::from_millis(delay / 2)).await;
             for c in cmds.split(';').map(str::trim).filter(|c| !c.is_empty()) {
-                if let Some(text) = c.strip_prefix("type:") {
-                    if let Some(f) = gtk::prelude::GtkWindowExt::focus(&a.window) {
-                        if let Some(e) = f.dynamic_cast_ref::<gtk::Text>() {
-                            e.set_text(text);
-                            e.activate();
-                        } else if let Some(e) = f.ancestor(gtk::Entry::static_type()).and_downcast::<gtk::Entry>() {
-                            e.set_text(text);
-                        }
+                if let Some(ms) = c.strip_prefix("sleep:") {
+                    glib::timeout_future(std::time::Duration::from_millis(ms.parse().unwrap_or(100))).await;
+                } else if let Some(text) = c.strip_prefix("type:") {
+                    if let Some(e) = focused_entry(&a) {
+                        e.set_text(text);
                     }
-                } else if let Some(id) = c.strip_prefix("enter:") {
-                    let _ = id;
-                    if let Some(f) = gtk::prelude::GtkWindowExt::focus(&a.window) {
-                        if let Some(e) = f.ancestor(gtk::Entry::static_type()).and_downcast::<gtk::Entry>() {
-                            e.emit_activate();
-                        }
+                } else if c == "enter:" {
+                    if let Some(e) = focused_entry(&a) {
+                        e.emit_activate();
                     }
                 } else {
                     a.run(c);
                 }
             }
+            if std::env::var_os("DOCVIEW_DEBUG").is_some() {
+                eprintln!("active buttons: {:?}", a.active_buttons());
+            }
         });
     }
     if let Ok(out) = std::env::var("DOCVIEW_SNAPSHOT") {
+        // A window on a hidden workspace gets no frame clock ticks, so lay out and draw by
+        // hand: one pass to request tiles, a second (after they render) to capture.
         let a = app.clone();
         glib::timeout_add_local_once(std::time::Duration::from_millis(delay), move || {
-            let snap = gtk::Snapshot::new();
-            // The window's own CSS background is not part of its child's snapshot.
-            if let Some(c) = a.window_bg() {
-                snap.append_color(&c, &gtk::graphene::Rect::new(0.0, 0.0, a.window.width() as f32, a.window.height() as f32));
-            }
-            if let Some(child) = a.window.child() {
-                a.window.snapshot_child(&child, &snap);
-            }
-            match (snap.to_node(), a.window.renderer()) {
-                (Some(node), Some(r)) => {
-                    let tex = r.render_texture(&node, None);
-                    if let Err(e) = tex.save_to_png(&out) {
-                        eprintln!("snapshot: {e}");
+            let _ = capture(&a);
+            let a2 = a.clone();
+            glib::timeout_add_local_once(std::time::Duration::from_millis(700), move || {
+                match capture(&a2) {
+                    Some(tex) => {
+                        if let Err(e) = tex.save_to_png(&out) {
+                            eprintln!("snapshot: {e}");
+                        }
                     }
+                    None => eprintln!("snapshot: nothing drawn"),
                 }
-                (n, r) => eprintln!("snapshot: node {} renderer {}", n.is_some(), r.is_some()),
-            }
-            if std::env::var_os("DOCVIEW_SNAPSHOT_QUIT").is_some() {
-                a.window.close();
-            }
+                if std::env::var_os("DOCVIEW_SNAPSHOT_QUIT").is_some() {
+                    a2.window.close();
+                }
+            });
         });
     }
+}
+
+fn focused_entry(a: &Rc<app::App>) -> Option<gtk::Entry> {
+    let f = gtk::prelude::GtkWindowExt::focus(&a.window)?;
+    f.clone().downcast::<gtk::Entry>().ok().or_else(|| f.ancestor(gtk::Entry::static_type()).and_downcast::<gtk::Entry>())
+}
+
+fn capture(a: &Rc<app::App>) -> Option<gtk::gdk::Texture> {
+    let (w, h) = (a.window.width(), a.window.height());
+    let child = a.window.child()?;
+    child.allocate(w, h, -1, None);
+    let snap = gtk::Snapshot::new();
+    // The window's own CSS background is not part of its child's snapshot.
+    if let Some(c) = a.window_bg() {
+        snap.append_color(&c, &gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
+    }
+    a.window.snapshot_child(&child, &snap);
+    let node = snap.to_node()?;
+    Some(a.window.renderer()?.render_texture(&node, None))
 }

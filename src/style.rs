@@ -274,7 +274,7 @@ switch slider {
   background: @fg; border: none; box-shadow: none; outline: none;
 }
 switch:checked slider { background: @bg; }
-switch image { color: transparent; -gtk-icon-size: 0; }
+switch image { color: transparent; }
 switch:focus-visible { outline: 2px solid alpha(@accent, 0.6); outline-offset: 2px; }
 
 dropdown > button, .settings dropdown button {

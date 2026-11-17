@@ -621,11 +621,10 @@ impl DocView {
             st.view_h = h;
         }
         self.relayout();
-        if let Some(p) = place {
-            if self.sr().fit != Fit::None {
+        if let Some(p) = place
+            && self.sr().fit != Fit::None {
                 self.go_to_place(p, false);
             }
-        }
         self.apply_pending_place();
         self.emit(Change::View);
     }
@@ -712,13 +711,16 @@ impl DocView {
         }
         let page = p.page.min(n - 1);
         self.ensure_row(page);
-        let st = self.sr();
-        let Some(b) = st.layout.boxes.get(page).copied().flatten() else { return };
-        let ppp = st.zoom * PX_PER_PT;
-        let x = if st.layout.w > st.view_w { b.x + b.w / 2.0 - st.view_w / 2.0 } else { 0.0 };
-        let (cur_x, _) = (self.hadj().map(|a| a.value()).unwrap_or(0.0), 0);
-        drop(st);
-        let x = if self.sr().layout.w > self.sr().view_w && (cur_x - x).abs() < self.sr().view_w { cur_x } else { x };
+        let (b, ppp, wide, view_w) = {
+            let st = self.sr();
+            let Some(b) = st.layout.boxes.get(page).copied().flatten() else { return };
+            (b, st.zoom * PX_PER_PT, st.layout.w > st.view_w, st.view_w)
+        };
+        // When zoomed wider than the window, keep the horizontal position if the target page
+        // is already in view; otherwise center it.
+        let cur_x = self.scroll_pos().0;
+        let centered = b.x + b.w / 2.0 - view_w / 2.0;
+        let x = if !wide { 0.0 } else if (cur_x - centered).abs() < view_w { cur_x } else { centered };
         self.set_scroll(x, b.y + p.y * ppp);
         self.emit(Change::View);
     }
@@ -790,7 +792,7 @@ impl DocView {
         if n == 0 {
             return;
         }
-        let (dual, cont) = (self.sr().opts.dual, self.sr().opts.continuous);
+        let dual = self.sr().opts.dual;
         let cur = self.current_page();
         let row_of = self.sr().layout.row_of.clone();
         let rows = self.sr().layout.rows.clone();
@@ -800,7 +802,6 @@ impl DocView {
         } else {
             (cur as i64 + dir as i64).clamp(0, n as i64 - 1) as usize
         };
-        let _ = cont;
         self.go_to_place(Place { page: target, y: -MARGIN / 2.0 / (self.zoom() * PX_PER_PT) }, false);
     }
 
@@ -958,7 +959,7 @@ impl DocView {
                 let min_gen = st.page_gen.get(&page).copied().unwrap_or(0);
                 let pkey = TileKey { page, scale: 0, tx: 0, ty: 0 };
                 let stale = |t: &Tile| t.generation < min_gen;
-                if st.tiles.get(&pkey).map(|t| stale(t)).unwrap_or(true) {
+                if st.tiles.get(&pkey).map(&stale).unwrap_or(true) {
                     previews.push(Job { page, scale: 0, tiles: vec![(0, 0)] });
                 }
                 // Visible part of the page, in page device pixels.
@@ -1067,7 +1068,7 @@ impl DocView {
                         let r = to_screen(m);
                         let rr = gsk::RoundedRect::from_rect(r.inset_r(-1.5, -1.0), 2.0);
                         snap.push_rounded_clip(&rr);
-                        snap.append_color(if current { &colors.find_current } else { &colors.find }, &rr.bounds());
+                        snap.append_color(if current { &colors.find_current } else { &colors.find }, rr.bounds());
                         snap.pop();
                         if current {
                             let c = rgba(colors.find_current, 1.0);
@@ -1247,11 +1248,10 @@ impl DocView {
         {
             let v = self.downgrade();
             pan.connect_drag_update(move |_, dx, dy| {
-                if let Some(v) = v.upgrade() {
-                    if let Some((px, py)) = v.sr().pan {
+                if let Some(v) = v.upgrade()
+                    && let Some((px, py)) = v.sr().pan {
                         v.set_scroll(px - dx, py - dy);
                     }
-                }
             });
         }
         {
@@ -1356,11 +1356,10 @@ impl DocView {
         {
             let v = self.downgrade();
             motion.connect_leave(move |_| {
-                if let Some(v) = v.upgrade() {
-                    if v.st().hover_link.take().is_some() {
+                if let Some(v) = v.upgrade()
+                    && v.st().hover_link.take().is_some() {
                         v.emit(Change::Hover(None));
                     }
-                }
             });
         }
         self.add_controller(motion);
@@ -1696,7 +1695,7 @@ impl DocView {
             if n == 0 || st.find.total == 0 {
                 return;
             }
-            let (cp, ci) = st.find.current.unwrap_or((self.current_page_unlocked(&st), usize::MAX));
+            let (cp, ci) = st.find.current.unwrap_or((st.find.start_page, usize::MAX));
             let mut page = cp;
             let mut idx = ci as i64;
             let mut result = None;
@@ -1718,10 +1717,6 @@ impl DocView {
             self.queue_draw();
             self.emit(Change::Find);
         }
-    }
-
-    fn current_page_unlocked(&self, st: &State) -> usize {
-        st.find.start_page
     }
 
     fn reveal_current_match(&self) {
@@ -1765,12 +1760,11 @@ impl DocView {
         let mut spans = self.sr().sel_rects.clone();
         if spans.is_empty() {
             let st = self.sr();
-            if let Some((p, i)) = st.find.current {
-                if let Some(r) = st.find.per_page.get(p).and_then(|v| v.get(i)) {
+            if let Some((p, i)) = st.find.current
+                && let Some(r) = st.find.per_page.get(p).and_then(|v| v.get(i)) {
                     // Search boxes hug the glyphs; widen a little to cover the line like a selection.
                     spans.push((p, vec![Rect::new(r.x0 - 0.5, r.y0 - 1.0, r.x1 + 0.5, r.y1 + 1.0)]));
                 }
-            }
         }
         if spans.is_empty() {
             return false;
@@ -1805,11 +1799,10 @@ impl DocView {
                 areas.push((*p, *r));
             }
         }
-        if areas.is_empty() {
-            if let Some(c) = self.sr().last_click {
+        if areas.is_empty()
+            && let Some(c) = self.sr().last_click {
                 areas.push((c.page, Rect::new(c.x - 0.5, c.y - 0.5, c.x + 0.5, c.y + 0.5)));
             }
-        }
         let mut edits = Vec::new();
         let mut pages = Vec::new();
         for (page, area) in areas {
@@ -1940,10 +1933,8 @@ impl DocView {
                     t.generation = generation;
                 }
             }
-            for p in pages {
-                st.page_gen.insert(*p as u32, generation + 1);
-            }
-            // Tiles rendered from now on count as fresh for those pages.
+            // Tiles rendered from now on count as fresh for those pages; their old tiles stay on
+            // screen, marked stale, until the new ones arrive.
             for p in pages {
                 st.page_gen.insert(*p as u32, generation);
                 let keys: Vec<TileKey> = st.tiles.keys().filter(|k| k.page == *p as u32).copied().collect();

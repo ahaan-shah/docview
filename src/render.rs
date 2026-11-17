@@ -321,7 +321,7 @@ fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolo
 /// are kept so colored figures stay distinguishable. Bytes are B, G, R, A (opaque).
 pub fn apply_recolor(px: &mut [u8], rc: Recolor) {
     let (bg, fg) = (rc.bg, rc.fg);
-    for p in px.chunks_exact_mut(4) {
+    for p in px.as_chunks_mut::<4>().0 {
         let (b, g, r) = (p[0] as i32, p[1] as i32, p[2] as i32);
         let l = (r * 77 + g * 150 + b * 29) >> 8; // 0..255
         let mix = |c_fg: u8, c_bg: u8| -> i32 { (c_fg as i32 * (255 - l) + c_bg as i32 * l) / 255 };

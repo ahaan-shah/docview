@@ -117,7 +117,7 @@ fn parse(svg: &str) -> Vec<Shape> {
                     .split(|c: char| c == ',' || c.is_whitespace())
                     .filter_map(|s| s.parse().ok())
                     .collect();
-                out.push(Shape::Lines(nums.chunks_exact(2).map(|p| (p[0], p[1])).collect(), name == "polygon"));
+                out.push(Shape::Lines(nums.as_chunks::<2>().0.iter().map(|p| (p[0], p[1])).collect(), name == "polygon"));
             }
             _ => {}
         }
@@ -334,8 +334,8 @@ fn arc(segs: &mut Vec<Seg>, x1: f64, y1: f64, rx: f64, ry: f64, rot_deg: f64, la
     let cx = cp * cxp - sp * cyp + (x1 + x2) / 2.0;
     let cy = sp * cxp + cp * cyp + (y1 + y2) / 2.0;
     let angle = |ux: f64, uy: f64, vx: f64, vy: f64| {
-        let a = (ux * vy - uy * vx).atan2(ux * vx + uy * vy);
-        a
+        
+        (ux * vy - uy * vx).atan2(ux * vx + uy * vy)
     };
     let t1 = angle(1.0, 0.0, (x1p - cxp) / rx, (y1p - cyp) / ry);
     let mut dt = angle((x1p - cxp) / rx, (y1p - cyp) / ry, (-x1p - cxp) / rx, (-y1p - cyp) / ry);

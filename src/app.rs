@@ -517,7 +517,7 @@ impl App {
             find: f(pal.c[3], 0.4),
             find_current: f(pal.accent, 0.45),
         };
-        let recolor = night.then(|| Recolor { bg: pal.bg, fg: pal.fg });
+        let recolor = night.then_some(Recolor { bg: pal.bg, fg: pal.fg });
         self.view.set_colors(colors, recolor);
         let hl = self.config.borrow().app.highlight.clone();
         let rgb = pal.resolve(&hl).unwrap_or(pal.c[3]);
@@ -535,11 +535,10 @@ impl App {
                     if !(hit(Some(f)) || hit(other)) {
                         return;
                     }
-                    if matches!(ev, gio::FileMonitorEvent::ChangesDoneHint | gio::FileMonitorEvent::Created | gio::FileMonitorEvent::MovedIn | gio::FileMonitorEvent::Renamed) {
-                        if let Some(a) = w.upgrade() {
+                    if matches!(ev, gio::FileMonitorEvent::ChangesDoneHint | gio::FileMonitorEvent::Created | gio::FileMonitorEvent::MovedIn | gio::FileMonitorEvent::Renamed)
+                        && let Some(a) = w.upgrade() {
                             a.apply_theme();
                         }
-                    }
                 });
                 self.monitors.borrow_mut().push(m);
             }
@@ -692,11 +691,10 @@ impl App {
                     | gio::FileMonitorEvent::MovedIn
                     | gio::FileMonitorEvent::Renamed
                     | gio::FileMonitorEvent::Changed
-            ) {
-                if let Some(a) = w.upgrade() {
+            )
+                && let Some(a) = w.upgrade() {
                     a.schedule_reload();
                 }
-            }
         });
         unsafe { m.set_data("docview-file", true) };
         // One file watcher at a time; the theme watcher stays.
@@ -1126,11 +1124,10 @@ impl App {
         }
         let w = Rc::downgrade(self);
         dialog.open(Some(&self.window), gio::Cancellable::NONE, move |res| {
-            if let (Some(a), Ok(f)) = (w.upgrade(), res) {
-                if let Some(p) = f.path() {
+            if let (Some(a), Ok(f)) = (w.upgrade(), res)
+                && let Some(p) = f.path() {
                     a.open_path(&p, None);
                 }
-            }
         });
     }
 

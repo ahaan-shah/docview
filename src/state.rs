@@ -44,11 +44,10 @@ pub fn load() -> State {
 
 impl State {
     pub fn save(&self) {
-        if let Some(p) = path() {
-            if let Ok(text) = serde_json::to_string(self) {
+        if let Some(p) = path()
+            && let Ok(text) = serde_json::to_string(self) {
                 let _ = atomic_write(&p, text.as_bytes());
             }
-        }
     }
 
     pub fn touch_recent(&mut self, file: &Path) {

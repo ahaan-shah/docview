@@ -132,12 +132,11 @@ pub fn compute(pages: &[(f64, f64)], zoom: f64, o: Opts, cur_row: usize, view_w:
     let center = (w / 2.0).floor();
     let mut boxes = vec![None; pages.len()];
     let mut y = MARGIN;
-    if !o.continuous {
-        if let Some(&r) = shown.first() {
+    if !o.continuous
+        && let Some(&r) = shown.first() {
             let rh = rows[r].iter().map(|&p| size(p).1).fold(0.0, f64::max);
             y = ((view_h - rh) / 2.0).max(MARGIN).floor();
         }
-    }
     for &r in &shown {
         let row = &rows[r];
         let rh = row.iter().map(|&p| size(p).1).fold(0.0, f64::max);

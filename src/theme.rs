@@ -119,12 +119,11 @@ pub fn builtin(portal: PortalState, source: &'static str, map: &BTreeMap<String,
     let light = portal.scheme == Some(2);
     let pal = if light { LIGHT } else { DARK };
     let mut colors: Vec<String> = pal.iter().map(|s| s.to_string()).collect();
-    if let Some((r, g, b)) = portal.accent {
-        if [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) {
+    if let Some((r, g, b)) = portal.accent
+        && [r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) {
             let h = |c: f64| (c * 255.0).round() as u8;
             colors[4] = format!("#{:02x}{:02x}{:02x}", h(r), h(g), h(b));
         }
-    }
     let fg = if light { "#24262b" } else { "#d7dae0" };
     Raw { background: colors[0].clone(), foreground: fg.into(), cursor: fg.into(), colors }
         .into_theme(source, map)
@@ -190,11 +189,10 @@ pub fn init_portal(
             400,
             gio::Cancellable::NONE,
         );
-        if let Ok(reply) = res {
-            if reply.n_children() > 0 {
+        if let Ok(reply) = res
+            && reply.n_children() > 0 {
                 apply_setting(&mut state.lock().unwrap(), key, reply.child_value(0));
             }
-        }
     }
     #[allow(deprecated)]
     let _id = conn.signal_subscribe(

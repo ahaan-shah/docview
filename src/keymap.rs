@@ -86,16 +86,14 @@ fn key_name(kv: gdk::Key) -> Option<String> {
         return Some(named.to_string());
     }
     let n = kv.name()?.to_string();
-    if let Some(f) = n.strip_prefix('F') {
-        if f.parse::<u8>().is_ok() {
+    if let Some(f) = n.strip_prefix('F')
+        && f.parse::<u8>().is_ok() {
             return Some(n);
         }
-    }
-    if let Some(d) = n.strip_prefix("KP_") {
-        if d.len() == 1 && d.chars().all(|c| c.is_ascii_digit()) {
+    if let Some(d) = n.strip_prefix("KP_")
+        && d.len() == 1 && d.chars().all(|c| c.is_ascii_digit()) {
             return Some(d.to_string());
         }
-    }
     let ch = kv.to_unicode()?;
     if ch.is_alphanumeric() {
         return Some(ch.to_uppercase().collect());

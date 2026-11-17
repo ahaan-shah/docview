@@ -30,6 +30,8 @@ const RIGHT: &[(&str, &[&str])] = &[
 
 pub struct App {
     pub window: gtk::ApplicationWindow,
+    topbar: gtk::WindowHandle,
+    statusbar: gtk::Box,
     view: DocView,
     stack: gtk::Stack,
     filename: gtk::Label,
@@ -59,6 +61,8 @@ pub struct App {
     hover: RefCell<Option<String>>,
     focus_mode: Cell<bool>,
     find_timer: RefCell<Option<glib::SourceId>>,
+    /// View settings to restore when presentation mode ends.
+    presenting: RefCell<Option<(Opts, Fit, f64)>>,
 }
 
 static PORTAL: std::sync::Mutex<theme::PortalState> =
@@ -233,6 +237,8 @@ impl App {
         let keymap = Keymap::new(&config.keys);
         let app = Rc::new(App {
             window,
+            topbar: handle,
+            statusbar: status,
             view,
             stack,
             filename,
@@ -262,6 +268,7 @@ impl App {
             hover: RefCell::new(None),
             focus_mode: Cell::new(false),
             find_timer: RefCell::new(None),
+            presenting: RefCell::new(None),
         });
         app.wire(&prev, &next, &close);
         app.apply_theme();
@@ -569,6 +576,12 @@ impl App {
         }
     }
 
+    /// Dev hook: pointer gesture on the document view (view coordinates).
+    pub fn simulate(&self, n: i32, from: (f64, f64), to: Option<(f64, f64)>) {
+        self.view.simulate(n, from, to);
+        self.refresh();
+    }
+
     /// Top-bar buttons that show as active, for the dev hooks.
     pub fn active_buttons(&self) -> Vec<&'static str> {
         let mut v: Vec<&'static str> = self.buttons.iter().filter(|(_, b)| b.has_css_class("active")).map(|(id, _)| *id).collect();
@@ -604,8 +617,13 @@ impl App {
                     // New document: back to the configured defaults.
                     self.apply_view_config();
                 }
+                let rotation = pos.as_ref().map(|p| p.rotation).unwrap_or(0);
                 let place = pos.map(|p| Place { page: p.page, y: p.offset });
                 self.view.set_doc(Some(doc), place);
+                let delta = rotation as i32 - self.view.rotation() as i32;
+                if delta != 0 {
+                    self.view.rotate(delta);
+                }
                 self.state.borrow_mut().touch_recent(&path);
                 self.state.borrow().save();
                 self.stack.set_visible_child_name("doc");
@@ -649,6 +667,7 @@ impl App {
             fit: fit.name().into(),
             dual: opts.dual,
             continuous: opts.continuous,
+            rotation: self.view.rotation(),
             at: 0,
         };
         let mut st = self.state.borrow_mut();
@@ -1015,10 +1034,15 @@ impl App {
                 self.apply_view_colors();
                 self.refresh();
             }
+            "rotate-right" if has => v.rotate(90),
+            "rotate-left" if has => v.rotate(-90),
+            "presentation" if has => self.toggle_presentation(),
+            "links" if has => self.pick_link(),
             "focus" => {
                 let on = !self.focus_mode.get();
                 self.focus_mode.set(on);
-                if on { self.window.add_css_class("focus-mode") } else { self.window.remove_css_class("focus-mode") }
+                self.topbar.set_visible(!on);
+                self.statusbar.set_visible(!on);
                 self.refresh();
             }
             "fullscreen" => {
@@ -1062,7 +1086,9 @@ impl App {
             }
             "highlights" if has => self.pick_highlight(),
             "escape" => {
-                if self.findbar.reveals_child() {
+                if self.presenting.borrow().is_some() {
+                    self.toggle_presentation();
+                } else if self.findbar.reveals_child() {
                     self.close_find();
                 } else if !v.clear_selection() && self.focus_mode.get() {
                     self.run("focus");
@@ -1158,6 +1184,68 @@ impl App {
             })
             .collect();
         ui::open_picker(&self.modal, items, "Go to section…", None, 400);
+    }
+
+    /// Fullscreen, no bars, one page at a time fitted to the screen. Again (or Escape) restores.
+    fn toggle_presentation(self: &Rc<Self>) {
+        let saved = self.presenting.take();
+        match saved {
+            Some((opts, fit, zoom)) => {
+                self.window.unfullscreen();
+                if self.focus_mode.get() {
+                    self.run("focus");
+                }
+                self.view.set_opts(opts);
+                if fit == Fit::None {
+                    self.view.set_zoom(zoom, None);
+                } else {
+                    self.view.set_fit(fit);
+                }
+            }
+            None => {
+                self.presenting.replace(Some((self.view.opts(), self.view.fit(), self.view.zoom())));
+                self.window.fullscreen();
+                if !self.focus_mode.get() {
+                    self.run("focus");
+                }
+                let mut o = self.view.opts();
+                o.continuous = false;
+                o.dual = false;
+                self.view.set_opts(o);
+                self.view.set_fit(Fit::Page);
+                self.toast.show("Presentation: Space / arrows to move, Esc to leave");
+            }
+        }
+        self.refresh();
+    }
+
+    fn pick_link(self: &Rc<Self>) {
+        let links = self.view.visible_links();
+        if links.is_empty() {
+            self.toast.show("No links on this page");
+            return;
+        }
+        let doc = self.view.doc().unwrap();
+        let items = links
+            .into_iter()
+            .map(|(_, link, text)| {
+                let target_desc = match &link.target {
+                    Target::Uri(u) => u.clone(),
+                    Target::File(f) => f.clone(),
+                    Target::Page { page, .. } => format!("page {}", doc.pages.get(*page).map(|p| p.label.clone()).unwrap_or_default()),
+                };
+                let (label, hint) = if text.is_empty() { (target_desc, None) } else { (text, Some(target_desc)) };
+                let w = Rc::downgrade(self);
+                let t = link.target.clone();
+                Item::new(label, hint, move || {
+                    if let Some(a) = w.upgrade() {
+                        a.view.go_to_target(t.clone());
+                        a.refresh();
+                    }
+                })
+            })
+            .collect();
+        ui::open_picker(&self.modal, items, "Follow a link…", None, 200);
     }
 
     fn pick_zoom(self: &Rc<Self>) {

@@ -104,6 +104,12 @@ fn dev_hooks(app: &Rc<app::App>) {
                     if let Some(e) = focused_entry(&a) {
                         e.set_text(text);
                     }
+                } else if let Some(args) = c.strip_prefix("drag:").or(c.strip_prefix("click:")).or(c.strip_prefix("dclick:")) {
+                    let v: Vec<f64> = args.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                    let n = if c.starts_with("dclick:") { 2 } else { 1 };
+                    if v.len() >= 2 {
+                        a.simulate(n, (v[0], v[1]), (v.len() >= 4).then(|| (v[2], v[3])));
+                    }
                 } else if c == "enter:" {
                     if let Some(e) = focused_entry(&a) {
                         e.emit_activate();

@@ -18,6 +18,8 @@ pub struct Position {
     pub fit: String,
     pub dual: bool,
     pub continuous: bool,
+    #[serde(default)]
+    pub rotation: u32,
     /// Seconds since the epoch, used to drop the oldest entries.
     pub at: u64,
 }
@@ -98,7 +100,7 @@ mod tests {
     use super::*;
 
     fn pos(page: usize) -> Position {
-        Position { page, offset: 0.0, zoom: None, fit: "width".into(), dual: false, continuous: true, at: 0 }
+        Position { page, offset: 0.0, zoom: None, fit: "width".into(), dual: false, continuous: true, rotation: 0, at: 0 }
     }
 
     #[test]

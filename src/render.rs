@@ -60,6 +60,8 @@ struct Queue {
     generation: u64,
     doc_gen: u64,
     recolor: Option<Recolor>,
+    /// Clockwise page rotation in degrees.
+    rotation: u32,
     jobs: VecDeque<Job>,
     in_flight: Option<Job>,
     quit: bool,
@@ -78,6 +80,7 @@ impl Renderer {
                 generation: 1,
                 doc_gen: 0,
                 recolor: None,
+                rotation: 0,
                 jobs: VecDeque::new(),
                 in_flight: None,
                 quit: false,
@@ -127,6 +130,15 @@ impl Renderer {
         })
     }
 
+    pub fn set_rotation(&self, rotation: u32) -> u64 {
+        self.with(|q| {
+            q.rotation = rotation;
+            q.generation += 1;
+            q.jobs.clear();
+            q.generation
+        })
+    }
+
     /// Replace the pending work. Tiles the worker is rendering right now are left out.
     pub fn request(&self, mut jobs: Vec<Job>) {
         self.with(|q| {
@@ -154,7 +166,7 @@ fn worker(shared: Arc<(Mutex<Queue>, Condvar)>, tx: async_channel::Sender<Render
     let mut doc: Option<poppler::Document> = None;
     let mut loaded_gen = 0u64;
     loop {
-        let (job, generation, recolor, reload) = {
+        let (job, generation, recolor, rotation, reload) = {
             let mut q = lock.lock().unwrap();
             q.in_flight = None;
             while !q.quit && q.jobs.is_empty() {
@@ -166,14 +178,14 @@ fn worker(shared: Arc<(Mutex<Queue>, Condvar)>, tx: async_channel::Sender<Render
             let job = q.jobs.pop_front().unwrap();
             q.in_flight = Some(job.clone());
             let reload = (q.doc_gen != loaded_gen).then(|| (q.path.clone(), q.password.clone(), q.doc_gen));
-            (job, q.generation, q.recolor, reload)
+            (job, q.generation, q.recolor, q.rotation, reload)
         };
         if let Some((path, password, g)) = reload {
             doc = path.and_then(|p| pdf::open_raw(&p, password.as_deref()).ok());
             loaded_gen = g;
         }
         let Some(d) = &doc else { continue };
-        for out in render_job(d, &job, recolor) {
+        for out in render_job(d, &job, recolor, rotation) {
             if tx.send_blocking(Rendered { generation, ..out }).is_err() {
                 return;
             }
@@ -183,14 +195,15 @@ fn worker(shared: Arc<(Mutex<Queue>, Condvar)>, tx: async_channel::Sender<Render
 
 /// Render the requested tiles of one page. Neighbouring tiles are drawn in one pass (poppler
 /// walks the whole page content stream per call), capped so the scratch surface stays small.
-fn render_job(doc: &poppler::Document, job: &Job, recolor: Option<Recolor>) -> Vec<Rendered> {
+fn render_job(doc: &poppler::Document, job: &Job, recolor: Option<Recolor>, rot: u32) -> Vec<Rendered> {
     let Some(page) = doc.page(job.page as i32) else { return Vec::new() };
-    let (pw, ph) = page.size();
+    let (uw, uh) = page.size();
+    let (pw, ph) = crate::layout::rot_size(rot, uw, uh);
     let mut out = Vec::new();
     if job.scale == 0 {
         let s = PREVIEW_W / pw.max(1.0);
         let (w, h) = ((pw * s).ceil() as i32, (ph * s).ceil() as i32);
-        if let Some(data) = draw(&page, s, 0, 0, w, h, recolor) {
+        if let Some(data) = draw(&page, s, 0, 0, w, h, recolor, rot) {
             out.push(Rendered { key: TileKey { page: job.page, scale: 0, tx: 0, ty: 0 }, generation: 0, w, h, data });
         }
         return out;
@@ -224,7 +237,7 @@ fn render_job(doc: &poppler::Document, job: &Job, recolor: Option<Recolor>) -> V
         if uw <= 0 || uh <= 0 {
             continue;
         }
-        let Some(data) = draw(&page, s, ux as i32, uy as i32, uw, uh, recolor) else { continue };
+        let Some(data) = draw(&page, s, ux as i32, uy as i32, uw, uh, recolor, rot) else { continue };
         let stride = uw as usize * 4;
         for (tx, ty) in batch {
             let x = (tx * TILE - ux) as usize;
@@ -260,7 +273,8 @@ fn bounds(batch: &[(u32, u32)], extra: (u32, u32)) -> (u32, u32, u32, u32) {
 }
 
 /// Render the device-pixel rectangle (x, y, w, h) of a page at `scale` into packed BGRA rows.
-fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolor: Option<Recolor>) -> Option<Vec<u8>> {
+#[allow(clippy::too_many_arguments)]
+fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolor: Option<Recolor>, rot: u32) -> Option<Vec<u8>> {
     // ARGB32 painted opaque white: exactly GDK's default memory format, so GTK can draw
     // the bytes without converting them.
     let mut surface = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
@@ -270,6 +284,23 @@ fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolo
         cr.paint().ok()?;
         cr.translate(-x as f64, -y as f64);
         cr.scale(scale, scale);
+        let (pw, ph) = page.size();
+        use std::f64::consts::{FRAC_PI_2, PI};
+        match rot {
+            90 => {
+                cr.translate(ph, 0.0);
+                cr.rotate(FRAC_PI_2);
+            }
+            180 => {
+                cr.translate(pw, ph);
+                cr.rotate(PI);
+            }
+            270 => {
+                cr.translate(0.0, pw);
+                cr.rotate(3.0 * FRAC_PI_2);
+            }
+            _ => {}
+        }
         page.render(&cr);
     }
     surface.flush();

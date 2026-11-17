@@ -119,6 +119,10 @@ pub struct State {
     pub opts: Opts,
     pub night: Option<Recolor>,
     pub colors: Colors,
+    /// Clockwise rotation of every page, in degrees.
+    pub rotation: u32,
+    /// Page sizes in points as displayed (rotated).
+    sizes: Vec<(f64, f64)>,
     layout: layout::Layout,
     cur_row: usize,
     view_w: f64,
@@ -162,6 +166,8 @@ impl Default for State {
             opts: Opts { continuous: true, dual: false, cover: true },
             night: None,
             colors: Colors::default(),
+            rotation: 0,
+            sizes: Vec::new(),
             layout: layout::Layout::default(),
             cur_row: 0,
             view_w: 0.0,
@@ -382,6 +388,8 @@ impl DocView {
         {
             let mut st = self.st();
             st.doc = doc.map(Rc::new);
+            let rot = st.rotation;
+            st.sizes = st.doc.as_ref().map(|d| d.pages.iter().map(|p| layout::rot_size(rot, p.w, p.h)).collect()).unwrap_or_default();
             st.generation = generation;
             st.tiles.clear();
             st.tile_bytes = 0;
@@ -452,6 +460,39 @@ impl DocView {
         self.st().cache_limit = (mb.clamp(16, 1024) as usize) << 20;
     }
 
+    pub fn rotation(&self) -> u32 {
+        self.sr().rotation
+    }
+
+    /// Rotate all pages by `delta` degrees (multiples of 90), keeping the current page.
+    pub fn rotate(&self, delta: i32) {
+        let page = self.current_page();
+        let rot = ((self.sr().rotation as i32 + delta).rem_euclid(360)) as u32;
+        let generation = self.renderer().set_rotation(rot);
+        {
+            let mut st = self.st();
+            st.rotation = rot;
+            st.sizes = st.doc.as_ref().map(|d| d.pages.iter().map(|p| layout::rot_size(rot, p.w, p.h)).collect()).unwrap_or_default();
+            st.generation = generation;
+            st.tiles.clear();
+            st.tile_bytes = 0;
+            st.last_jobs.clear();
+        }
+        self.relayout();
+        if self.n_pages() > 0 {
+            self.go_to_place(Place { page, y: -MARGIN / 2.0 / (self.zoom() * PX_PER_PT) }, false);
+        }
+        self.emit(Change::View);
+    }
+
+    /// Unrotated page rect -> displayed page rect.
+    fn disp_rect(&self, st: &State, page: usize, r: &Rect) -> Rect {
+        match st.doc.as_ref().and_then(|d| d.pages.get(page)) {
+            Some(p) => layout::rot_rect(st.rotation, p.w, p.h, r),
+            None => *r,
+        }
+    }
+
     pub fn zoom(&self) -> f64 {
         self.sr().zoom
     }
@@ -488,9 +529,10 @@ impl DocView {
         }
         self.relayout();
         if let Some(p) = hit {
+            let (dx, dy) = self.disp_point(&p);
             if let Some(b) = self.sr().layout.boxes.get(p.page).copied().flatten() {
                 let ppp = zoom * PX_PER_PT;
-                self.set_scroll(b.x + p.x * ppp - ax, b.y + p.y * ppp - ay);
+                self.set_scroll(b.x + dx * ppp - ax, b.y + dy * ppp - ay);
             }
         }
         self.emit(Change::View);
@@ -542,11 +584,11 @@ impl DocView {
                 return;
             }
             if st.fit != Fit::None {
-                st.zoom = layout::fit_zoom(&doc.pages, st.fit, st.opts.dual, vw, vh, st.zoom);
+                st.zoom = layout::fit_zoom(&st.sizes, st.fit, st.opts.dual, vw, vh, st.zoom);
             }
             let n_rows = layout::rows(doc.n_pages(), st.opts.dual, st.opts.cover).len();
             st.cur_row = st.cur_row.min(n_rows.saturating_sub(1));
-            st.layout = layout::compute(&doc.pages, st.zoom, st.opts, st.cur_row, vw, vh);
+            st.layout = layout::compute(&st.sizes, st.zoom, st.opts, st.cur_row, vw, vh);
         }
         self.configure_adjustments();
         self.queue_draw();
@@ -820,7 +862,7 @@ impl DocView {
         for (i, b) in st.layout.boxes.iter().enumerate() {
             let Some(b) = b else { continue };
             if b.contains(x, y) {
-                return Some(DocPoint { page: i, x: (x - b.x) / ppp, y: (y - b.y) / ppp });
+                return Some(self.page_point(&st, i, (x - b.x) / ppp, (y - b.y) / ppp));
             }
             if nearest {
                 let dx = if x < b.x { b.x - x } else if x > b.x + b.w { x - b.x - b.w } else { 0.0 };
@@ -831,11 +873,25 @@ impl DocView {
                 }
             }
         }
-        best.map(|(_, i, b)| DocPoint {
-            page: i,
-            x: ((x - b.x) / ppp).clamp(0.0, b.w / ppp),
-            y: ((y - b.y) / ppp).clamp(0.0, b.h / ppp),
-        })
+        best.map(|(_, i, b)| self.page_point(&st, i, ((x - b.x) / ppp).clamp(0.0, b.w / ppp), ((y - b.y) / ppp).clamp(0.0, b.h / ppp)))
+    }
+
+    /// Displayed page point -> unrotated page point.
+    fn page_point(&self, st: &State, page: usize, dx: f64, dy: f64) -> DocPoint {
+        let (x, y) = match st.doc.as_ref().and_then(|d| d.pages.get(page)) {
+            Some(p) => layout::unrot_point(st.rotation, p.w, p.h, dx, dy),
+            None => (dx, dy),
+        };
+        DocPoint { page, x, y }
+    }
+
+    /// Unrotated page point -> displayed page point.
+    fn disp_point(&self, p: &DocPoint) -> (f64, f64) {
+        let st = self.sr();
+        match st.doc.as_ref().and_then(|d| d.pages.get(p.page)) {
+            Some(pg) => layout::rot_point(st.rotation, pg.w, pg.h, p.x, p.y),
+            None => (p.x, p.y),
+        }
     }
 
     fn widget_point(&self, wx: f64, wy: f64, nearest: bool) -> Option<DocPoint> {
@@ -846,6 +902,10 @@ impl DocView {
     /// Scroll so a page rectangle is visible, centering it if it is not.
     fn reveal(&self, page: usize, r: &Rect) {
         self.ensure_row(page);
+        let r = &{
+            let st = self.sr();
+            self.disp_rect(&st, page, r)
+        };
         let (vw, vh, b, ppp) = {
             let st = self.sr();
             let Some(b) = st.layout.boxes.get(page).copied().flatten() else { return };
@@ -904,8 +964,8 @@ impl DocView {
                 // Visible part of the page, in page device pixels.
                 let y_lo = if visible { sy } else { sy - margin };
                 let y_hi = if visible { sy + vh } else { sy + vh + margin };
-                let full_w = (doc.pages[i].w * rs).ceil();
-                let full_h = (doc.pages[i].h * rs).ceil();
+                let full_w = (st.sizes[i].0 * rs).ceil();
+                let full_h = (st.sizes[i].1 * rs).ceil();
                 let dev = |v: f64, o: f64| ((v - o) / ppp * rs).max(0.0);
                 let tx0 = (dev(sx.max(b.x), b.x) / TILE as f64).floor() as u32;
                 let tx1 = ((dev((sx + vw).min(b.x + b.w), b.x).min(full_w) - 1.0).max(0.0) / TILE as f64).floor() as u32;
@@ -990,7 +1050,10 @@ impl DocView {
                 }
 
                 // ---- overlays: search matches, selection
+                let (upw, uph) = (doc.pages[i].w, doc.pages[i].h);
+                let rot = st.rotation;
                 let to_screen = |r: &Rect| {
+                    let r = &layout::rot_rect(rot, upw, uph, r);
                     graphene::Rect::new(
                         (x + r.x0 * ppp) as f32,
                         (y + r.y0 * ppp) as f32,
@@ -1300,6 +1363,31 @@ impl DocView {
         self.add_controller(motion);
     }
 
+    /// Dev hook: replay a pointer gesture through the same code paths as the real gestures.
+    /// `n` is the click count; `to` makes it a drag.
+    pub fn simulate(&self, n: i32, from: (f64, f64), to: Option<(f64, f64)>) {
+        self.on_press(n, from.0, from.1, false);
+        match to {
+            Some((x, y)) => {
+                {
+                    let mut st = self.st();
+                    st.drag.start = from;
+                    st.drag.last = (x, y);
+                    st.drag.moved = true;
+                }
+                self.extend_selection_to(x, y);
+                self.selection_done();
+            }
+            None => {
+                let link = self.st().drag.on_link.take();
+                if let Some(t) = link {
+                    self.follow(t);
+                }
+            }
+        }
+        self.st().drag.style = None;
+    }
+
     fn links_on(&self, page: usize) -> Rc<Vec<pdf::Link>> {
         if let Some(l) = self.sr().links.get(&page) {
             return l.clone();
@@ -1497,9 +1585,12 @@ impl DocView {
 
     fn follow(&self, t: Target) {
         match t {
-            Target::Page { page, y, .. } => {
+            Target::Page { page, x, y } => {
                 let ppp = self.zoom() * PX_PER_PT;
-                let y = y.map(|y| y - 12.0 / ppp).unwrap_or(-MARGIN / 2.0 / ppp);
+                let y = match y {
+                    Some(y) => self.disp_point(&DocPoint { page, x: x.unwrap_or(0.0), y }).1 - 12.0 / ppp,
+                    None => -MARGIN / 2.0 / ppp,
+                };
                 self.go_to_place(Place { page, y }, true);
             }
             Target::Uri(u) => {
@@ -1664,10 +1755,20 @@ impl DocView {
         self.st().highlight_rgb = rgb;
     }
 
-    /// Highlight the selection. Returns false when nothing is selected.
+    /// Highlight the selection, or the current search match when nothing is selected (so
+    /// highlighting works from the keyboard: find, then highlight). False when neither exists.
     pub fn highlight_selection(&self) -> bool {
         let Some(doc) = self.doc() else { return false };
-        let spans = self.sr().sel_rects.clone();
+        let mut spans = self.sr().sel_rects.clone();
+        if spans.is_empty() {
+            let st = self.sr();
+            if let Some((p, i)) = st.find.current {
+                if let Some(r) = st.find.per_page.get(p).and_then(|v| v.get(i)) {
+                    // Search boxes hug the glyphs; widen a little to cover the line like a selection.
+                    spans.push((p, vec![Rect::new(r.x0 - 0.5, r.y0 - 1.0, r.x1 + 0.5, r.y1 + 1.0)]));
+                }
+            }
+        }
         if spans.is_empty() {
             return false;
         }
@@ -1782,6 +1883,29 @@ impl DocView {
                     text.push_str(t.trim());
                 }
                 out.push((page, bound, text.split_whitespace().collect::<Vec<_>>().join(" ")));
+            }
+        }
+        out
+    }
+
+    /// Links on the visible pages: (page, link, the text under it).
+    pub fn visible_links(&self) -> Vec<(usize, pdf::Link, String)> {
+        let Some(doc) = self.doc() else { return Vec::new() };
+        let (sy, vh) = (self.scroll_pos().1, self.sr().view_h);
+        let pages: Vec<usize> = self
+            .sr()
+            .layout
+            .boxes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.filter(|b| b.y + b.h >= sy && b.y <= sy + vh).map(|_| i))
+            .collect();
+        let mut out = Vec::new();
+        for page in pages {
+            for l in self.links_on(page).iter() {
+                let mid = (l.rect.y0 + l.rect.y1) / 2.0;
+                let text = doc.selected_text(page, (l.rect.x0, mid), (l.rect.x1, mid), SelStyle::Glyph);
+                out.push((page, l.clone(), text.split_whitespace().collect::<Vec<_>>().join(" ")));
             }
         }
         out

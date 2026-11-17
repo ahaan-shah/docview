@@ -1,7 +1,5 @@
 //! Page placement. Pure functions of page sizes and view settings, in logical pixels.
 
-use crate::pdf::PageInfo;
-
 pub const MARGIN: f64 = 16.0;
 pub const GAP: f64 = 12.0;
 /// Logical pixels per point at 100% zoom (96 dpi screen, 72 points per inch).
@@ -82,19 +80,19 @@ pub fn rows(n: usize, dual: bool, cover: bool) -> Vec<Vec<usize>> {
 }
 
 /// A typical page size (the median), so one odd page does not decide the fit zoom.
-pub fn typical_size(pages: &[PageInfo]) -> (f64, f64) {
+pub fn typical_size(pages: &[(f64, f64)]) -> (f64, f64) {
     if pages.is_empty() {
         return (612.0, 792.0);
     }
-    let mut ws: Vec<f64> = pages.iter().map(|p| p.w).collect();
-    let mut hs: Vec<f64> = pages.iter().map(|p| p.h).collect();
+    let mut ws: Vec<f64> = pages.iter().map(|p| p.0).collect();
+    let mut hs: Vec<f64> = pages.iter().map(|p| p.1).collect();
     ws.sort_by(|a, b| a.partial_cmp(b).unwrap());
     hs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     (ws[ws.len() / 2], hs[hs.len() / 2])
 }
 
 /// Zoom (1.0 = 100%) that makes a typical page (or spread) fit the view.
-pub fn fit_zoom(pages: &[PageInfo], fit: Fit, dual: bool, view_w: f64, view_h: f64, current: f64) -> f64 {
+pub fn fit_zoom(pages: &[(f64, f64)], fit: Fit, dual: bool, view_w: f64, view_h: f64, current: f64) -> f64 {
     let (pw, ph) = typical_size(pages);
     let cols = if dual { 2.0 } else { 1.0 };
     let avail_w = (view_w - 2.0 * MARGIN - if dual { GAP } else { 0.0 }).max(50.0);
@@ -108,7 +106,8 @@ pub fn fit_zoom(pages: &[PageInfo], fit: Fit, dual: bool, view_w: f64, view_h: f
     z.clamp(MIN_ZOOM, MAX_ZOOM)
 }
 
-pub fn compute(pages: &[PageInfo], zoom: f64, o: Opts, cur_row: usize, view_w: f64, view_h: f64) -> Layout {
+/// `pages` are page sizes in points as displayed (after rotation).
+pub fn compute(pages: &[(f64, f64)], zoom: f64, o: Opts, cur_row: usize, view_w: f64, view_h: f64) -> Layout {
     let ppp = zoom * PX_PER_PT;
     let rows = rows(pages.len(), o.dual, o.cover);
     let mut row_of = vec![0; pages.len()];
@@ -117,9 +116,9 @@ pub fn compute(pages: &[PageInfo], zoom: f64, o: Opts, cur_row: usize, view_w: f
             row_of[p] = r;
         }
     }
-    let size = |p: usize| (pages[p].w * ppp, pages[p].h * ppp);
+    let size = |p: usize| (pages[p].0 * ppp, pages[p].1 * ppp);
     // Half-width of each column in dual mode: spreads line up on a common spine.
-    let half = if o.dual { pages.iter().map(|p| p.w * ppp).fold(0.0, f64::max) } else { 0.0 };
+    let half = if o.dual { pages.iter().map(|p| p.0 * ppp).fold(0.0, f64::max) } else { 0.0 };
     let row_w = |row: &Vec<usize>| -> f64 {
         if o.dual { 2.0 * half + GAP } else { size(row[0]).0 }
     };
@@ -161,15 +160,60 @@ pub fn compute(pages: &[PageInfo], zoom: f64, o: Opts, cur_row: usize, view_w: f
     Layout { boxes, rows, row_of, w, h: content_h.max(view_h) }
 }
 
+/// Unrotated page point (points, top-left origin) -> point on the page as displayed with a
+/// clockwise rotation of `rot` degrees. `pw`, `ph` are the unrotated page size.
+pub fn rot_point(rot: u32, pw: f64, ph: f64, x: f64, y: f64) -> (f64, f64) {
+    match rot {
+        90 => (ph - y, x),
+        180 => (pw - x, ph - y),
+        270 => (y, pw - x),
+        _ => (x, y),
+    }
+}
+
+/// Inverse of `rot_point`.
+pub fn unrot_point(rot: u32, pw: f64, ph: f64, x: f64, y: f64) -> (f64, f64) {
+    match rot {
+        90 => (y, ph - x),
+        180 => (pw - x, ph - y),
+        270 => (pw - y, x),
+        _ => (x, y),
+    }
+}
+
+pub fn rot_rect(rot: u32, pw: f64, ph: f64, r: &crate::pdf::Rect) -> crate::pdf::Rect {
+    let (ax, ay) = rot_point(rot, pw, ph, r.x0, r.y0);
+    let (bx, by) = rot_point(rot, pw, ph, r.x1, r.y1);
+    crate::pdf::Rect::new(ax, ay, bx, by)
+}
+
+/// Page size as displayed.
+pub fn rot_size(rot: u32, w: f64, h: f64) -> (f64, f64) {
+    if rot == 90 || rot == 270 { (h, w) } else { (w, h) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn pages(n: usize) -> Vec<PageInfo> {
-        (0..n).map(|i| PageInfo { w: 600.0, h: 800.0, label: (i + 1).to_string() }).collect()
+    fn pages(n: usize) -> Vec<(f64, f64)> {
+        vec![(600.0, 800.0); n]
     }
 
     const CONT: Opts = Opts { continuous: true, dual: false, cover: false };
+
+    #[test]
+    fn rotation_roundtrips() {
+        for rot in [0, 90, 180, 270] {
+            let (dx, dy) = rot_point(rot, 600.0, 800.0, 10.0, 20.0);
+            let (dw, dh) = rot_size(rot, 600.0, 800.0);
+            assert!(dx >= 0.0 && dx <= dw && dy >= 0.0 && dy <= dh, "{rot}");
+            let (x, y) = unrot_point(rot, 600.0, 800.0, dx, dy);
+            assert!((x - 10.0).abs() < 1e-9 && (y - 20.0).abs() < 1e-9, "{rot}");
+        }
+        // 90° clockwise: the page's top-left corner ends up at the top-right.
+        assert_eq!(rot_point(90, 600.0, 800.0, 0.0, 0.0), (800.0, 0.0));
+    }
 
     #[test]
     fn rows_for_modes() {

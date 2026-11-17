@@ -184,7 +184,6 @@ entry.page-entry > text > selection, entry > text > selection { background: @sel
 .statusbar > * { margin-left: 16px; }
 .statusbar > *:first-child { margin-left: 0; }
 
-window.focus-mode .topbar, window.focus-mode .statusbar { opacity: 0; }
 
 /* ---- find bar (allwrite's CodeMirror search panel) ---- */
 .findbar { padding: 6px 10px; background: @panel; border-top: 1px solid @border; }

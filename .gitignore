@@ -1,0 +1,26 @@
+# Build output
+target/
+*.deb
+*.rpm
+*.tar.gz
+*.pkg.tar.zst
+packaging/pkg/
+packaging/src/
+
+# Secrets and credentials: never commit these
+.env
+.env.*
+*.pem
+*.key
+*.p12
+credentials*
+secrets*
+
+# Editors, OS and tools
+.idea/
+.vscode/
+*.swp
+*~
+.DS_Store
+.claude/
+*.log

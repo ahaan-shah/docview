@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="PDF viewer icon">
+<defs>
+ <linearGradient id="left" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#e8c7ad"/><stop offset="1" stop-color="#f8e7d8"/></linearGradient>
+ <linearGradient id="right" x1="1" y1="0" x2="0" y2="1"><stop stop-color="#e8c7ad"/><stop offset="1" stop-color="#f8e7d8"/></linearGradient>
+ <linearGradient id="cornerShadow" x1="1" y1="0" x2="0" y2="1"><stop stop-color="#d8aa86" stop-opacity=".8"/><stop offset="1" stop-color="#fdf2e8" stop-opacity="0"/></linearGradient>
+ <clipPath id="page"><path d="M158 85 H298 Q307 85 315 93 L393 170 Q400 177 400 187 V378 Q400 424 354 424 H158 Q112 424 112 378 V131 Q112 85 158 85 Z"/></clipPath>
+</defs>
+<rect width="512" height="512" rx="124" fill="#151515"/>
+<g clip-path="url(#page)">
+ <rect x="112" y="85" width="288" height="339" fill="#fdf2e9"/>
+ <path d="M112 309 C176 320 232 355 256 405 L256 424 H112 Z" fill="url(#left)"/>
+ <path d="M400 309 C336 320 280 355 256 405 L256 424 H400 Z" fill="url(#right)"/>
+ <path d="M290 85 H318 L400 167 V198 H339 Q290 198 290 149 Z" fill="url(#cornerShadow)"/>
+ <path d="M308 85 L400 177 H337 Q308 177 308 148 Z" fill="#fff6ef"/>
+</g>
+</svg>

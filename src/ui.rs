@@ -403,7 +403,8 @@ pub fn prompt(modal: &Rc<Modal>, message: &str, password: bool, on_submit: Rc<dy
 }
 
 /// Keyboard shortcut cheat sheet: sections of (label, "Ctrl+X or Y").
-pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, note: &str, max_h: i32) -> gtk::Box {
+/// `avail_w`: the width the panel may take; two columns that do not fit become one.
+pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, note: &str, max_h: i32, avail_w: i32) -> gtk::Box {
     let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
     panel.add_css_class("shortcuts");
     panel.set_size_request(760, -1);
@@ -446,6 +447,21 @@ pub fn shortcuts_panel(sections: Vec<(&'static str, Vec<(String, String)>)>, not
     }
     cols.append(&left);
     cols.append(&right);
+    // Room for the overlay scrollbar, so it never covers the keys.
+    cols.set_margin_end(16);
+    // Two columns need about 880 px (the widest key rows). Do not measure here: the panel
+    // is not in the window yet, so its labels would be measured (and styled) without the
+    // window's CSS.
+    if avail_w < 880 {
+        cols.set_homogeneous(false);
+        while let Some(sec) = right.first_child() {
+            right.remove(&sec);
+            left.append(&sec);
+        }
+        cols.remove(&right);
+        left.set_hexpand(true);
+        panel.set_size_request(avail_w.min(560), -1);
+    }
     scroller.set_child(Some(&cols));
     panel.append(&scroller);
     let n = gtk::Label::new(Some(note));

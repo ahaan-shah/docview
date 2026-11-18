@@ -28,6 +28,10 @@ const RIGHT: &[(&str, &[&str])] = &[
     ("app", &["open", "palette", "settings"]),
 ];
 
+/// Theme slots offered as highlight colors (settings and the highlight button's menu).
+/// Names come from the actual color (`style::color_name`): pywal slots follow the wallpaper.
+const HL_COLORS: &[&str] = &["color1", "color2", "color3", "color4", "color5", "color6", "accent"];
+
 pub struct App {
     pub window: gtk::ApplicationWindow,
     topbar: gtk::WindowHandle,
@@ -106,7 +110,7 @@ impl App {
         let bar = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         bar.add_css_class("topbar");
         let mut buttons = HashMap::new();
-        let left = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let left = gtk::Box::new(gtk::Orientation::Horizontal, 3);
         left.add_css_class("group");
         for id in LEFT {
             let b = icon_button(id);
@@ -144,7 +148,7 @@ impl App {
         zoom_btn.set_can_focus(false);
         let mut groups = Vec::new();
         for (group, ids) in RIGHT {
-            let g = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let g = gtk::Box::new(gtk::Orientation::Horizontal, 3);
             g.add_css_class("group");
             g.set_valign(gtk::Align::Center);
             for id in *ids {
@@ -312,6 +316,20 @@ impl App {
                     a.run(id);
                 }
             });
+        }
+        // Right-click on the highlight button: pick the color (left click uses the last one).
+        if let Some(b) = self.buttons.get("highlight") {
+            let w = Rc::downgrade(self);
+            let click = gtk::GestureClick::new();
+            click.set_button(gdk::BUTTON_SECONDARY);
+            click.connect_pressed(move |g, _, _, _| {
+                g.set_state(gtk::EventSequenceState::Claimed);
+                if let (Some(a), Some(b)) = (w.upgrade(), g.widget()) {
+                    a.highlight_menu(&b);
+                }
+            });
+            b.add_controller(click);
+            b.set_tooltip_text(Some("Highlight (right-click for color)"));
         }
         {
             let w = Rc::downgrade(self);
@@ -1408,24 +1426,120 @@ impl App {
     }
 
     fn pick_highlight_color(self: &Rc<Self>) {
-        let names = [("Yellow", "color3"), ("Green", "color2"), ("Red", "color1"), ("Blue", "color4"), ("Purple", "color5"), ("Cyan", "color6"), ("Orange", "color11"), ("Accent", "accent")];
         let current = self.config.borrow().app.highlight.clone();
-        let items = names
+        let pal = self.palette.borrow().clone();
+        let items = HL_COLORS
             .iter()
-            .map(|(label, slot)| {
+            .map(|slot| {
                 let w = Rc::downgrade(self);
+                let rgb = pal.resolve(slot).unwrap_or(pal.c[3]);
+                let label = format!("{}  {}", style::color_name(rgb), style::hex(rgb));
                 let slot = slot.to_string();
-                let hint = if slot == current { Some("current".to_string()) } else { Some(slot.clone()) };
-                Item::new(*label, hint, move || {
+                let hint = (slot == current).then(|| "current".to_string());
+                Item::new(label, hint, move || {
                     if let Some(a) = w.upgrade() {
-                        a.config.borrow_mut().app.highlight = slot.clone();
-                        a.save_config();
-                        a.apply_view_colors();
+                        a.set_highlight_color(&slot);
                     }
                 })
             })
             .collect();
         ui::open_picker(&self.modal, items, "Highlight color…", None, 60);
+    }
+
+    fn set_highlight_color(&self, slot: &str) {
+        self.config.borrow_mut().app.highlight = slot.to_string();
+        self.save_config();
+        self.apply_view_colors();
+    }
+
+    /// Name of the configured highlight color, from the color itself ("Orange").
+    fn highlight_name(&self) -> String {
+        let cur = self.config.borrow().app.highlight.clone();
+        let pal = self.palette.borrow();
+        style::color_name(pal.resolve(&cur).unwrap_or(pal.c[3])).to_string()
+    }
+
+    /// A row of round color swatches; `on_pick` runs after the color is saved.
+    fn color_swatches(self: &Rc<Self>, on_pick: Rc<dyn Fn(&Rc<App>)>) -> gtk::Box {
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        row.add_css_class("swatches");
+        row.set_valign(gtk::Align::Center);
+        let pal = self.palette.borrow().clone();
+        let current = self.config.borrow().app.highlight.clone();
+        let mut all = Vec::new();
+        let mut slots: Vec<&'static str> = Vec::new();
+        let mut seen: Vec<style::Rgb> = Vec::new();
+        for slot in HL_COLORS {
+            let rgb = pal.resolve(slot).unwrap_or(pal.c[3]);
+            // The accent often equals one of the palette colors; show each color once.
+            if seen.contains(&rgb) && *slot != current {
+                continue;
+            }
+            seen.push(rgb);
+            slots.push(slot);
+            let name = format!("{}  {}", style::color_name(rgb), style::hex(rgb));
+            let dot = gtk::DrawingArea::new();
+            dot.set_content_width(16);
+            dot.set_content_height(16);
+            dot.set_draw_func(move |_, cr, w, h| {
+                let r = (w.min(h) as f64) / 2.0;
+                cr.arc(w as f64 / 2.0, h as f64 / 2.0, r, 0.0, std::f64::consts::TAU);
+                cr.set_source_rgb(rgb[0] as f64 / 255.0, rgb[1] as f64 / 255.0, rgb[2] as f64 / 255.0);
+                let _ = cr.fill();
+            });
+            let b = gtk::Button::new();
+            b.add_css_class("swatch");
+            b.set_child(Some(&dot));
+            b.set_tooltip_text(Some(&name));
+            b.set_valign(gtk::Align::Center);
+            b.set_focus_on_click(false);
+            if *slot == current {
+                b.add_css_class("active");
+            }
+            row.append(&b);
+            all.push(b);
+        }
+        for (i, b) in all.iter().enumerate() {
+            let w = Rc::downgrade(self);
+            let (others, on_pick, slot) = (all.clone(), on_pick.clone(), slots[i]);
+            b.connect_clicked(move |_| {
+                let Some(a) = w.upgrade() else { return };
+                for (j, o) in others.iter().enumerate() {
+                    if i == j { o.add_css_class("active") } else { o.remove_css_class("active") }
+                }
+                a.set_highlight_color(slot);
+                on_pick(&a);
+            });
+        }
+        row
+    }
+
+    /// Color menu under the highlight button. Picking a color also highlights the selection.
+    fn highlight_menu(self: &Rc<Self>, anchor: &gtk::Widget) {
+        let pop = gtk::Popover::new();
+        pop.add_css_class("hl-menu");
+        pop.set_has_arrow(false);
+        pop.set_position(gtk::PositionType::Bottom);
+        pop.set_parent(anchor);
+        let box_ = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        let title = gtk::Label::new(Some("Highlight color"));
+        title.add_css_class("menu-title");
+        title.set_xalign(0.0);
+        box_.append(&title);
+        let p = pop.clone();
+        box_.append(&self.color_swatches(Rc::new(move |a| {
+            p.popdown();
+            // Apply to the current selection (or search match) right away, quietly if none.
+            if a.view.doc().is_some() {
+                a.view.highlight_selection();
+            }
+        })));
+        pop.set_child(Some(&box_));
+        pop.connect_closed(|p| {
+            let p = p.clone();
+            glib::idle_add_local_once(move || p.unparent());
+        });
+        pop.popup();
     }
 
     fn pick_highlight(self: &Rc<Self>) {
@@ -1505,27 +1619,33 @@ impl App {
         );
         // Leave room for the panel's top offset, title and note.
         let max_h = (self.window.height() as f64 * 0.88) as i32 - 150;
-        let panel = ui::shortcuts_panel(sections, &note, max_h);
+        let panel = ui::shortcuts_panel(sections, &note, max_h, self.window.width() - 32);
         drop(km);
         self.modal.open(&panel, None);
         panel.grab_focus();
     }
 
     fn settings(self: &Rc<Self>) {
-        let panel = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        let panel = gtk::Box::new(gtk::Orientation::Vertical, 2);
         panel.add_css_class("settings");
-        panel.set_size_request(400, -1);
+        panel.set_size_request(500, -1);
         let title = gtk::Label::new(Some("SETTINGS"));
         title.add_css_class("heading");
         title.set_xalign(0.0);
         panel.append(&title);
         let c = self.config.borrow().clone();
-        let switch_row = |label: &str, on: bool, f: Box<dyn Fn(&Rc<App>, bool)>| {
+        // Each row highlights as a whole while hovered or while focus is inside it.
+        let new_row = |label: &str| {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
             row.add_css_class("setting");
             let l = gtk::Label::new(Some(label));
             l.set_xalign(0.0);
             l.set_hexpand(true);
+            row.append(&l);
+            row
+        };
+        let switch_row = |label: &str, on: bool, f: Box<dyn Fn(&Rc<App>, bool)>| {
+            let row = new_row(label);
             let s = gtk::Switch::new();
             s.set_active(on);
             s.set_valign(gtk::Align::Center);
@@ -1538,8 +1658,47 @@ impl App {
                 }
                 glib::Propagation::Proceed
             });
-            row.append(&l);
+            // A click anywhere on the row flips the switch.
+            let click = gtk::GestureClick::new();
+            let sw = s.clone();
+            click.connect_released(move |g, _, x, y| {
+                let Some(row) = g.widget() else { return };
+                let on_switch = row.pick(x, y, gtk::PickFlags::DEFAULT).is_some_and(|p| p == sw || p.is_ancestor(&sw));
+                if !on_switch {
+                    sw.set_active(!sw.is_active());
+                    sw.grab_focus();
+                }
+            });
+            row.add_controller(click);
             row.append(&s);
+            row
+        };
+        // Segmented choice: one toggle per option, Left / Right moves between them.
+        let choice_row = |label: &str, opts: &[&str], active: usize, f: Rc<dyn Fn(&Rc<App>, usize)>| {
+            let row = new_row(label);
+            let seg = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            seg.add_css_class("segmented");
+            seg.set_valign(gtk::Align::Center);
+            let mut first: Option<gtk::ToggleButton> = None;
+            for (i, o) in opts.iter().enumerate() {
+                let t = gtk::ToggleButton::with_label(o);
+                t.add_css_class("seg");
+                t.set_focus_on_click(false);
+                if let Some(g) = &first {
+                    t.set_group(Some(g));
+                } else {
+                    first = Some(t.clone());
+                }
+                t.set_active(i == active);
+                let (w, f) = (Rc::downgrade(self), f.clone());
+                t.connect_toggled(move |t| {
+                    if let (true, Some(a)) = (t.is_active(), w.upgrade()) {
+                        f(&a, i);
+                    }
+                });
+                seg.append(&t);
+            }
+            row.append(&seg);
             row
         };
         let set_opts = |a: &Rc<App>| {
@@ -1569,82 +1728,46 @@ impl App {
         panel.append(&switch_row("Reopen where I left off", c.app.restore_position, Box::new(|a, v| {
             a.config.borrow_mut().app.restore_position = v;
         })));
-        // Color mode
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        row.add_css_class("setting");
-        let l = gtk::Label::new(Some("Colors"));
-        l.set_xalign(0.0);
-        l.set_hexpand(true);
         let modes = ["system", "light", "dark"];
-        let dd = gtk::DropDown::from_strings(&["System (pywal)", "Light", "Dark"]);
-        dd.set_selected(modes.iter().position(|m| *m == c.app.mode).unwrap_or(0) as u32);
-        dd.set_valign(gtk::Align::Center);
-        {
-            let w = Rc::downgrade(self);
-            dd.connect_selected_notify(move |d| {
-                if let Some(a) = w.upgrade() {
-                    a.config.borrow_mut().app.mode = modes[d.selected().min(2) as usize].into();
-                    a.save_config();
-                    a.apply_theme();
-                }
-            });
-        }
-        row.append(&l);
-        row.append(&dd);
-        panel.append(&row);
-        // Default fit
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        row.add_css_class("setting");
-        let l = gtk::Label::new(Some("New documents open at"));
-        l.set_xalign(0.0);
-        l.set_hexpand(true);
-        let dd = gtk::DropDown::from_strings(&["Fit width", "Fit page", "100%"]);
-        dd.set_selected(match c.view.fit.as_str() { "width" => 0, "page" => 1, _ => 2 });
-        dd.set_valign(gtk::Align::Center);
-        {
-            let w = Rc::downgrade(self);
-            dd.connect_selected_notify(move |d| {
-                if let Some(a) = w.upgrade() {
-                    let mut c = a.config.borrow_mut();
-                    c.view.fit = ["width", "page", "none"][d.selected().min(2) as usize].into();
-                    c.view.zoom = 1.0;
-                    drop(c);
-                    a.save_config();
-                }
-            });
-        }
-        row.append(&l);
-        row.append(&dd);
-        panel.append(&row);
-        // Highlight color
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
-        row.add_css_class("setting");
-        let l = gtk::Label::new(Some("Highlight color"));
-        l.set_xalign(0.0);
-        l.set_hexpand(true);
-        let b = gtk::Button::with_label(&c.app.highlight);
-        b.add_css_class("btn");
-        b.set_valign(gtk::Align::Center);
-        {
-            let w = Rc::downgrade(self);
-            b.connect_clicked(move |_| {
-                if let Some(a) = w.upgrade() {
-                    a.modal.close();
-                    a.pick_highlight_color();
-                }
-            });
-        }
-        row.append(&l);
-        row.append(&b);
+        let mode_row = choice_row(
+            "Colors",
+            &["System", "Light", "Dark"],
+            modes.iter().position(|m| *m == c.app.mode).unwrap_or(0),
+            Rc::new(move |a, i| {
+                a.config.borrow_mut().app.mode = modes[i].into();
+                a.save_config();
+                a.apply_theme();
+            }),
+        );
+        mode_row.set_tooltip_text(Some("System follows pywal, or your desktop's light / dark setting"));
+        panel.append(&mode_row);
+        panel.append(&choice_row(
+            "New documents open at",
+            &["Fit width", "Fit page", "100%"],
+            match c.view.fit.as_str() { "width" => 0, "page" => 1, _ => 2 },
+            Rc::new(|a, i| {
+                let mut c = a.config.borrow_mut();
+                c.view.fit = ["width", "page", "none"][i].into();
+                c.view.zoom = 1.0;
+                drop(c);
+                a.save_config();
+            }),
+        ));
+        // Highlight color: the actual colors, with the chosen one's name.
+        let row = new_row("Highlight color");
+        let name = gtk::Label::new(Some(&self.highlight_name()));
+        name.add_css_class("value");
+        row.append(&name);
+        let n = name.clone();
+        row.append(&self.color_swatches(Rc::new(move |a| n.set_text(&a.highlight_name()))));
         panel.append(&row);
         let note = gtk::Label::new(Some(&format!(
-            "System colors follow pywal, or your desktop's light / dark setting. More options (keys, theme slots, UI font, cache size) in {}",
+            "More options in {}",
             config::path().map(|p| home_short(&p)).unwrap_or_default()
         )));
         note.add_css_class("settings-note");
-        note.set_wrap(true);
         note.set_xalign(0.0);
-        note.set_max_width_chars(48);
+        note.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         panel.append(&note);
         self.modal.open(&panel, None);
         panel.child_focus(gtk::DirectionType::TabForward);

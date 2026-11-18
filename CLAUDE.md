@@ -79,6 +79,12 @@ examples/make_sample.rs   generates the test / screenshot PDF
   strong reference all buttons and shortcuts silently do nothing.
 - **Use `append_texture` for full-resolution tiles**, not `append_scaled_texture`: the cairo
   renderer draws scaled-texture nodes through a 1x intermediate, which blurs pages on HiDPI.
+- **Highlights are drawn by the render worker**, not poppler (its appearance has rounded
+  ends): `pdf::render_without_highlights` calls `poppler_page_render_full` (looked up with
+  dlsym, poppler >= 25.02; older poppler falls back to a plain render) and `render::draw`
+  fills the quads with a multiply operator.
+- Do not `measure` a widget before it is in the window: it gets styled without the window's
+  CSS (the shortcut sheet came out in a monospace font).
 - **The window's minimum size must stay small.** Hyprland tiles windows; if the content's minimum
   size is bigger than the tile, GTK asks for a resize that never comes and stops drawing and
   handling input (the app looks frozen and pages stay as blurry previews). The top bar sits in a

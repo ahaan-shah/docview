@@ -301,7 +301,20 @@ fn draw(page: &poppler::Page, scale: f64, x: i32, y: i32, w: i32, h: i32, recolo
             }
             _ => {}
         }
-        page.render(&cr);
+        // Highlights are drawn here as flat marker strokes (multiply, like ink on paper)
+        // instead of poppler's rounded appearance.
+        if pdf::render_without_highlights(page, &cr) {
+            cr.set_operator(cairo::Operator::Multiply);
+            for (_, quads, (r, g, b)) in pdf::page_highlights(page) {
+                cr.set_source_rgb(r as f64 / 255.0, g as f64 / 255.0, b as f64 / 255.0);
+                for q in quads {
+                    cr.rectangle(q.x0, q.y0, q.x1 - q.x0, q.y1 - q.y0);
+                }
+                let _ = cr.fill();
+            }
+        } else {
+            page.render(&cr);
+        }
     }
     surface.flush();
     let stride = surface.stride() as usize;
@@ -336,6 +349,38 @@ pub fn apply_recolor(px: &mut [u8], rc: Recolor) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Highlights are drawn by us (flat, multiplied), not skipped.
+    #[test]
+    fn highlights_are_drawn() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/sample.pdf");
+        let doc = pdf::open_raw(&path, None).unwrap();
+        let mut seen = false;
+        for i in 0..doc.n_pages() {
+            let page = doc.page(i).unwrap();
+            let Some((_, quads, _)) = pdf::page_highlights(&page).into_iter().find(|h| !h.1.is_empty()) else { continue };
+            let q = quads[0];
+            let (w, h) = page.size();
+            let px = draw(&page, 1.0, 0, 0, w.ceil() as i32, h.ceil() as i32, None, 0).unwrap();
+            // Average over the quad: colored, not white paper.
+            let (mut sum, mut n) = ([0u64; 3], 0u64);
+            for y in q.y0.ceil() as usize..q.y1.floor() as usize {
+                for x in q.x0.ceil() as usize..q.x1.floor() as usize {
+                    let o = (y * w.ceil() as usize + x) * 4;
+                    for c in 0..3 {
+                        sum[c] += px[o + c] as u64;
+                    }
+                    n += 1;
+                }
+            }
+            let avg: Vec<u64> = sum.iter().map(|s| s / n.max(1)).collect();
+            assert!(avg.iter().max().unwrap() - avg.iter().min().unwrap() > 30, "page {i} quad {q:?} avg {avg:?}");
+            seen = true;
+        }
+        if !seen {
+            eprintln!("fixture has no highlights; nothing checked");
+        }
+    }
 
     #[test]
     fn recolor_maps_white_to_bg_and_black_to_fg() {

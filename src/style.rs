@@ -137,6 +137,40 @@ impl Palette {
 }
 
 /// Mirrors allwrite's styles.css. Sizes in px; GTK CSS has no color-mix(), so mix()/alpha().
+/// "#d8a25e"
+pub fn hex(c: Rgb) -> String {
+    format!("#{:02x}{:02x}{:02x}", c[0], c[1], c[2])
+}
+
+/// A plain name for a color from its hue ("Orange"), for theme slots whose color varies.
+pub fn color_name(c: Rgb) -> &'static str {
+    let [r, g, b] = [c[0] as f64 / 255.0, c[1] as f64 / 255.0, c[2] as f64 / 255.0];
+    let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+    let (l, d) = ((max + min) / 2.0, max - min);
+    let sat = if d == 0.0 { 0.0 } else { d / (1.0 - (2.0 * l - 1.0).abs()) };
+    if sat < 0.18 || d < 0.08 {
+        return if l > 0.8 { "White" } else if l < 0.2 { "Black" } else { "Gray" };
+    }
+    let h = if max == r {
+        60.0 * (((g - b) / d).rem_euclid(6.0))
+    } else if max == g {
+        60.0 * ((b - r) / d + 2.0)
+    } else {
+        60.0 * ((r - g) / d + 4.0)
+    };
+    match h {
+        h if h < 15.0 => "Red",
+        h if h < 45.0 => "Orange",
+        h if h < 68.0 => "Yellow",
+        h if h < 160.0 => "Green",
+        h if h < 200.0 => "Cyan",
+        h if h < 255.0 => "Blue",
+        h if h < 290.0 => "Purple",
+        h if h < 335.0 => "Pink",
+        _ => "Red",
+    }
+}
+
 const STYLESHEET: &str = r#"
 window.docview { background: @bg; color: @fg; font-size: 12.5px; }
 window.docview label, window.docview entry, window.docview button { font-size: 12.5px; }
@@ -255,13 +289,49 @@ label.kbd {
 .dialog entry:focus-within { border-color: @accent; }
 .dialog .buttons > * { margin-left: 8px; }
 
-.settings, .shortcuts { padding: 16px 18px; }
-.settings label, .shortcuts label { font-size: 13px; }
+.shortcuts { padding: 16px 18px; }
+.shortcuts label { font-size: 13px; }
 label.heading {
   margin-bottom: 12px; font-size: 13px; font-weight: 600; color: @muted; letter-spacing: 0.5px;
 }
-.setting { min-height: 34px; }
 .settings-note, label.settings-note { margin-top: 12px; color: @muted; font-size: 11.5px; }
+
+/* ---- settings: whole rows highlight on hover and while focus is inside ---- */
+.settings { padding: 20px 14px 16px; }
+.settings label.heading { margin: 0 12px 10px; font-size: 13.5px; }
+.settings label { font-size: 14px; }
+.settings .setting {
+  min-height: 44px; padding: 0 12px; border-radius: 8px; transition: background 100ms;
+}
+.settings .setting:hover { background: alpha(@accent, 0.06); }
+.settings .setting:focus-within { background: alpha(@accent, 0.13); }
+.settings .setting label.value { color: @muted; font-size: 13px; }
+.settings label.settings-note { margin: 10px 12px 0; font-size: 12px; }
+.settings switch:focus-visible { outline: none; }
+
+/* segmented choice (color mode, default fit) */
+.segmented { padding: 2px; border: 1px solid @border; border-radius: 8px; background: @bg; }
+.segmented > * { margin-left: 2px; }
+.segmented > *:first-child { margin-left: 0; }
+button.seg {
+  min-height: 26px; padding: 0 12px; border: none; border-radius: 6px;
+  background: none; box-shadow: none; color: @muted; font-size: 13px; transition: background 100ms, color 100ms;
+}
+button.seg label { font-size: 13px; }
+button.seg:hover { background: @hover; color: @fg; }
+button.seg:checked { background: alpha(@accent, 0.18); color: @accent; font-weight: 600; }
+button.seg:focus-visible { outline: 2px solid alpha(@accent, 0.6); outline-offset: -2px; }
+
+/* color swatches (settings, highlight button menu) */
+button.swatch {
+  min-width: 0; min-height: 0; padding: 3px; border: 2px solid transparent; border-radius: 50%;
+  background: none; box-shadow: none; transition: border-color 100ms;
+}
+button.swatch:hover { border-color: alpha(@fg, 0.35); }
+button.swatch.active { border-color: @fg; }
+button.swatch:focus-visible { border-color: @accent; outline: none; }
+popover.hl-menu > contents { padding: 10px 10px 8px; }
+popover.hl-menu label.menu-title { color: @muted; font-size: 12px; font-weight: 600; margin: 0 2px 2px; }
 
 switch {
   min-width: 32px; min-height: 18px; border-radius: 9px; padding: 0; margin: 0;

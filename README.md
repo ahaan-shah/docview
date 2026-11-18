@@ -37,7 +37,7 @@ Hyprland, and runs on any Linux desktop.
 **Text.**
 - Select by dragging, double-click a word, triple-click a line, `Shift`-click to extend. Selections can span pages, and are also put on the primary selection for middle-click paste.
 - Find (`Ctrl F`) searches the whole document on a background thread, shows every match, and counts them as it goes.
-- Highlights (`Ctrl H`) are saved into the PDF itself, so every other viewer sees them. With nothing selected, `Ctrl H` highlights the current search match, so you can highlight without touching the mouse. Remove with `Delete`, undo and redo with `Ctrl Z` / `Ctrl Shift Z`, and jump between them with `Ctrl Shift H`.
+- Highlights (`Ctrl H`) are saved into the PDF itself, so every other viewer sees them. With nothing selected, `Ctrl H` highlights the current search match, so you can highlight without touching the mouse. Remove with `Delete`, undo and redo with `Ctrl Z` / `Ctrl Shift Z`, and jump between them with `Ctrl Shift H`. Right-click the highlight button to pick its color; a left click uses the last one.
 
 **Getting around.**
 - Type a page number or label (`iv`, `12`) in the top bar, or press `Ctrl G`.

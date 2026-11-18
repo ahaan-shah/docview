@@ -332,23 +332,7 @@ impl Doc {
     /// Highlight annotations on a page: (bounding rect, quads).
     pub fn highlights(&self, page: usize) -> Vec<(Rect, Vec<Rect>)> {
         let Some(p) = self.page(page) else { return Vec::new() };
-        let h = self.pages[page].h;
-        let mut out = Vec::new();
-        unsafe {
-            let list = ffi::poppler_page_get_annot_mapping(p.as_ptr());
-            let mut node = list;
-            while !node.is_null() {
-                let m = (*node).data as *const ffi::PopplerAnnotMapping;
-                if !m.is_null() && ffi::poppler_annot_get_annot_type((*m).annot) == ffi::POPPLER_ANNOT_HIGHLIGHT {
-                    let a = (*m).area;
-                    let quads = annot_quads((*m).annot as *mut ffi::PopplerAnnotTextMarkup, h);
-                    out.push((Rect::new(a.x1, h - a.y2, a.x2, h - a.y1), quads));
-                }
-                node = (*node).next;
-            }
-            ffi::poppler_page_free_annot_mapping(list);
-        }
-        out
+        page_highlights(&p).into_iter().map(|(b, q, _)| (b, q)).collect()
     }
 
     /// Add a highlight annotation covering `rects` (points, top-left origin).
@@ -438,6 +422,45 @@ impl Doc {
             e.to_string()
         })
     }
+}
+
+/// Highlight annotations of a page: (bounding rect, quads, color), top-left origin.
+pub fn page_highlights(p: &poppler::Page) -> Vec<(Rect, Vec<Rect>, (u8, u8, u8))> {
+    let h = p.size().1;
+    let mut out = Vec::new();
+    unsafe {
+        let list = ffi::poppler_page_get_annot_mapping(p.as_ptr());
+        let mut node = list;
+        while !node.is_null() {
+            let m = (*node).data as *const ffi::PopplerAnnotMapping;
+            if !m.is_null() && ffi::poppler_annot_get_annot_type((*m).annot) == ffi::POPPLER_ANNOT_HIGHLIGHT {
+                let a = (*m).area;
+                let quads = annot_quads((*m).annot as *mut ffi::PopplerAnnotTextMarkup, h);
+                out.push((Rect::new(a.x1, h - a.y2, a.x2, h - a.y1), quads, annot_color((*m).annot)));
+            }
+            node = (*node).next;
+        }
+        ffi::poppler_page_free_annot_mapping(list);
+    }
+    out
+}
+
+/// Render a page with every annotation except highlights, which poppler draws with rounded
+/// ends. Returns false when this poppler is older than 25.02 (no `poppler_page_render_full`);
+/// the caller then falls back to a normal render. Looked up at run time so the release build
+/// still runs on Ubuntu 24.04's poppler.
+pub fn render_without_highlights(p: &poppler::Page, cr: &gtk::cairo::Context) -> bool {
+    type RenderFull = unsafe extern "C" fn(*mut ffi::PopplerPage, *mut std::ffi::c_void, i32, u32);
+    static F: std::sync::OnceLock<Option<RenderFull>> = std::sync::OnceLock::new();
+    let f = F.get_or_init(|| unsafe {
+        let sym = libc::dlsym(libc::RTLD_DEFAULT, c"poppler_page_render_full".as_ptr());
+        (!sym.is_null()).then(|| std::mem::transmute::<*mut libc::c_void, RenderFull>(sym))
+    });
+    let Some(f) = f else { return false };
+    const ALL: u32 = (1 << 26) - 1;
+    const HIGHLIGHT: u32 = 1 << 8;
+    unsafe { f(p.as_ptr(), cr.to_raw_none() as *mut _, 0, ALL & !HIGHLIGHT) };
+    true
 }
 
 unsafe fn annot_color(annot: *mut ffi::PopplerAnnot) -> (u8, u8, u8) {

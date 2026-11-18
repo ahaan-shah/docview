@@ -69,6 +69,11 @@ api! {
     webkit_navigation_action_get_request: fn(P) -> P;
     webkit_uri_request_get_uri: fn(P) -> *const c_char;
     webkit_policy_decision_ignore: fn(P);
+    webkit_network_session_get_default: fn() -> P;
+    webkit_network_proxy_settings_new: fn(*const c_char, *const *const c_char) -> P;
+    webkit_network_proxy_settings_free: fn(P);
+    webkit_network_session_set_proxy_settings: fn(P, i32, P);
+    webkit_permission_request_deny: fn(P);
 }
 
 fn api() -> Option<&'static Api> {
@@ -96,6 +101,37 @@ pub fn file_uri(path: &Path) -> String {
     gtk::gio::File::for_path(path).uri().to_string()
 }
 
+/// Schemes a page may load in docview. Everything else (http, https, ftp, mailto, ...) is
+/// handed to the user's browser or mail app instead.
+pub fn is_local(uri: &str) -> bool {
+    let scheme = uri.split_once(':').map(|(s, _)| s.to_ascii_lowercase()).unwrap_or_default();
+    matches!(scheme.as_str(), "file" | "about" | "data" | "blob")
+}
+
+/// Unreachable proxy for every network request: pages get no network at all (no remote
+/// images, scripts, fetch, beacons or websockets), so a page can neither download anything
+/// nor send anything out. Port 9 on loopback ("discard") refuses connections.
+const NO_NETWORK_PROXY: &std::ffi::CStr = c"http://127.0.0.1:9";
+
+/// WebKit features a document viewer does not need, off to shrink the attack surface.
+/// WebRTC matters most: its UDP traffic would not go through the proxy.
+const SETTINGS_OFF: &[&str] = &[
+    "enable-webrtc",
+    "enable-media-stream",
+    "enable-webgl",
+    "enable-webaudio",
+    "enable-encrypted-media",
+    "enable-mediasource",
+    "enable-dns-prefetching",
+    "enable-offline-web-application-cache",
+    "enable-page-cache",
+    "enable-developer-extras",
+    "javascript-can-access-clipboard",
+    "javascript-can-open-windows-automatically",
+    "allow-file-access-from-file-urls",
+    "allow-universal-access-from-file-urls",
+];
+
 /// Inverts the page for night mode and inverts media back, the usual "dark reader" trick.
 const NIGHT_CSS: &str = "html { filter: invert(1) hue-rotate(180deg) !important; background: #fff !important; } \
      img, video, picture, canvas, iframe, embed, object, svg image, [style*=\"background-image\"] \
@@ -118,6 +154,13 @@ impl Web {
                 // Smallest caches: we show one document, not a browsing session.
                 (api.webkit_web_context_set_cache_model)(ctx, 0);
             }
+            let session = (api.webkit_network_session_get_default)();
+            if session.is_null() {
+                return None; // never show pages without the network cut off
+            }
+            let proxy = (api.webkit_network_proxy_settings_new)(NO_NETWORK_PROXY.as_ptr(), std::ptr::null());
+            (api.webkit_network_session_set_proxy_settings)(session, 2, proxy);
+            (api.webkit_network_proxy_settings_free)(proxy);
             let raw = (api.webkit_web_view_new)();
             if raw.is_null() {
                 return None;
@@ -127,9 +170,22 @@ impl Web {
             // CPU rendering, like the rest of docview: no GPU process or driver memory.
             (api.webkit_settings_set_hardware_acceleration_policy)(settings, 1);
             (api.webkit_settings_set_enable_back_forward_navigation_gestures)(settings, 1);
+            let so: glib::Object = from_glib_none(settings as *mut glib::gobject_ffi::GObject);
+            for name in SETTINGS_OFF {
+                if so.find_property(name).is_some() {
+                    so.set_property(name, false);
+                }
+            }
             let find: glib::Object = from_glib_none((api.webkit_web_view_get_find_controller)(raw) as *mut glib::gobject_ffi::GObject);
             widget.set_hexpand(true);
             widget.set_vexpand(true);
+            // Location, notifications, camera, ...: always no.
+            widget.connect_local("permission-request", false, move |v| {
+                if let Ok(req) = v[1].get::<glib::Object>() {
+                    (api.webkit_permission_request_deny)(req.as_ptr() as P);
+                }
+                Some(true.to_value())
+            });
             Some(Web { widget, api, find, print_op: RefCell::new(None) })
         }
     }
@@ -275,9 +331,11 @@ impl Web {
         });
     }
 
-    /// Navigation policy: links that open a new window load here instead, and `on_link`
-    /// may take over a link (returns true to stop WebKit from loading it), e.g. a local PDF.
-    pub fn connect_links(&self, on_link: impl Fn(&str) -> bool + 'static) {
+    /// Navigation policy. Only local pages load here (`is_local`); any other link is
+    /// refused and passed to `on_external` (open it in the browser). Links that open a new
+    /// window load here instead, and `on_link` may take over a local link (returns true to
+    /// stop WebKit from loading it), e.g. a PDF.
+    pub fn connect_links(&self, on_link: impl Fn(&str) -> bool + 'static, on_external: impl Fn(&str) + 'static) {
         let api = self.api;
         let view = self.widget.downgrade();
         self.widget.connect_local("decide-policy", false, move |v| {
@@ -293,7 +351,15 @@ impl Web {
                 let s = if req.is_null() { std::ptr::null() } else { (api.webkit_uri_request_get_uri)(req) };
                 (!s.is_null()).then(|| std::ffi::CStr::from_ptr(s).to_string_lossy().to_string())
             };
-            let Some(uri) = uri else { return Some(false.to_value()) };
+            let Some(uri) = uri else {
+                unsafe { (api.webkit_policy_decision_ignore)(d) };
+                return Some(true.to_value());
+            };
+            if !is_local(&uri) {
+                unsafe { (api.webkit_policy_decision_ignore)(d) };
+                on_external(&uri);
+                return Some(true.to_value());
+            }
             if on_link(&uri) {
                 unsafe { (api.webkit_policy_decision_ignore)(d) };
                 return Some(true.to_value());
@@ -336,6 +402,12 @@ mod tests {
         assert!(!is_html(&b));
         assert!(is_html(Path::new("/nonexistent/x.HTM")));
         assert!(!is_html(Path::new("/nonexistent/x.pdf")));
+        assert!(is_local("file:///tmp/a.html#top"));
+        assert!(is_local("about:blank"));
+        assert!(!is_local("https://example.com"));
+        assert!(!is_local("HTTP://example.com"));
+        assert!(!is_local("mailto:someone@example.com"));
+        assert!(!is_local("javascript-ish"));
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

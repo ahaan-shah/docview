@@ -921,6 +921,15 @@ impl App {
             }
             a.on_view_change(Change::OpenFile(p.to_string_lossy().to_string()));
             true
+        }, {
+            // Web links never load in docview: the browser opens them.
+            let a = Rc::downgrade(self);
+            move |uri: &str| {
+                if let Some(a) = a.upgrade() {
+                    crate::launch_uri(&a.window, uri);
+                    a.toast.show("Opened in your browser");
+                }
+            }
         });
         // Ctrl + wheel zooms, as on a PDF.
         let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE);

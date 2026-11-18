@@ -90,7 +90,12 @@ examples/make_sample.rs   generates the test / screenshot PDF
   top-bar buttons and palette entries show; `App::run_web` handles commands for pages. Plain keys
   go to the page. `lean_env` sets `__EGL_VENDOR_LIBRARY_FILENAMES=/dev/null` so WebKit does not
   load GPU drivers + LLVM into docview (~55 MB); launch other programs with `launch_uri` /
-  `spawn_self`, which remove docview's env overrides. A hidden ws9 window does not repaint web
+  `spawn_self`, which remove docview's env overrides.
+  Pages are local-only and offline: `Web::new` points WebKit's network session at a refusing proxy
+  (`NO_NETWORK_PROXY`, so no fetch / images / websockets / beacons), turns off WebRTC (UDP would
+  bypass the proxy) and other `SETTINGS_OFF`, and denies permission requests. `connect_links`
+  refuses any non-`is_local` navigation and hands it to the browser; `main.rs` sends
+  `docview https://...` to the browser too. Do not loosen this without the user asking. A hidden ws9 window does not repaint web
   content, so snapshots show only the first frame of a page.
 - Do not `measure` a widget before it is in the window: it gets styled without the window's
   CSS (the shortcut sheet came out in a monospace font).

@@ -58,6 +58,13 @@ engine behind GNOME Web. The top bar switches to what a page needs:
 The page gets plain keys, so scrolling and typing into forms work as in a
 browser. Edit the file and the page reloads.
 
+docview only opens web pages saved on your computer, and keeps them offline:
+- Pages can't use the network. Remote images, scripts, fonts and requests are blocked, so a page can't download anything or send anything out.
+- Links to websites, and `docview https://…`, open in your normal browser.
+- Requests for your location, camera, microphone or notifications are always refused.
+- Features a document doesn't need are off: WebRTC, WebGL, web audio, DRM and pop-ups.
+- Each page runs in WebKit's own sandboxed process.
+
 WebKit is loaded only when you open a page. Reading PDFs never pays for it, and
 it closes again when you go back to a PDF. A page costs about 200 MB across
 docview and WebKit's processes, like a browser tab. This needs WebKitGTK 6:
@@ -231,9 +238,9 @@ Command ids are listed in [`src/commands.rs`](src/commands.rs).
 
 ## Your data
 
-There's no account, no telemetry and no update check. Reading PDFs never
-touches the network. A web page loads what it links to (images, fonts, other
-pages), as it would in a browser. docview keeps a list of recent files and your place in each
+There's no account, no telemetry and no update check, and docview never
+touches the network: web pages are cut off from it too (links open in your
+browser). docview keeps a list of recent files and your place in each
 document in `~/.local/state/docview/state.json`.
 
 ## Building from source

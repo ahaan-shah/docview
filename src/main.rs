@@ -109,6 +109,21 @@ fn main() -> glib::ExitCode {
         start(&app, None);
     });
     gapp.connect_open(|g, files, _| {
+        // `docview https://...`: web addresses belong in the browser; docview only shows
+        // local files.
+        if let Some(f) = files.first()
+            && f.path().is_none() {
+                let ctx = gtk::gdk::Display::default().map(|d| d.app_launch_context());
+                if let Some(c) = &ctx {
+                    for v in LEAN_VARS.get().into_iter().flatten() {
+                        c.unsetenv(v);
+                    }
+                }
+                if let Err(e) = gio::AppInfo::launch_default_for_uri(&f.uri(), ctx.as_ref()) {
+                    eprintln!("docview: could not open {}: {e}", f.uri());
+                }
+                return;
+            }
         let app = app::App::new(g);
         start(&app, files.first().and_then(|f| f.path()));
     });

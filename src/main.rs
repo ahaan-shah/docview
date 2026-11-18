@@ -92,7 +92,12 @@ thread_local! {
 fn start(app: &Rc<app::App>, file: Option<std::path::PathBuf>) {
     APPS.with(|a| a.borrow_mut().push(app.clone()));
     app.window.connect_destroy(|w| {
-        APPS.with(|a| a.borrow_mut().retain(|x| x.window != *w));
+        // try_with: windows are also destroyed while the list itself is dropped at exit.
+        let _ = APPS.try_with(|a| {
+            if let Ok(mut a) = a.try_borrow_mut() {
+                a.retain(|x| x.window != *w);
+            }
+        });
     });
     if let Some((w, h)) = std::env::var("DOCVIEW_SIZE").ok().and_then(|s| {
         let (w, h) = s.split_once('x')?;
@@ -183,7 +188,10 @@ fn capture(a: &Rc<app::App>) -> Option<gtk::gdk::Texture> {
         .unwrap_or((a.window.width(), a.window.height()));
     let child = a.window.child()?;
     child.allocate(w, h, -1, None);
+    // Render at the display's scale, so the PNG shows real device pixels.
+    let k = a.window.surface().map(|s| s.scale()).unwrap_or(1.0) as f32;
     let snap = gtk::Snapshot::new();
+    snap.scale(k, k);
     // The window's own CSS background is not part of its child's snapshot.
     if let Some(c) = a.window_bg() {
         snap.append_color(&c, &gtk::graphene::Rect::new(0.0, 0.0, w as f32, h as f32));
@@ -192,5 +200,9 @@ fn capture(a: &Rc<app::App>) -> Option<gtk::gdk::Texture> {
     a.window.snapshot_child(&child, &snap);
     snap.pop();
     let node = snap.to_node()?;
-    Some(a.window.renderer()?.render_texture(&node, None))
+    if let Ok(p) = std::env::var("DOCVIEW_NODE") {
+        let _ = std::fs::write(p, node.serialize());
+    }
+    let vp = gtk::graphene::Rect::new(0.0, 0.0, w as f32 * k, h as f32 * k);
+    Some(a.window.renderer()?.render_texture(&node, Some(&vp)))
 }

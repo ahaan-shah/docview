@@ -1071,7 +1071,9 @@ impl DocView {
                                 (t.tex.width() as f64 / s) as f32,
                                 (t.tex.height() as f64 / s) as f32,
                             );
-                            snap.append_scaled_texture(&t.tex, gsk::ScalingFilter::Linear, &r);
+                            // A plain texture node: the cairo renderer draws a scaled-texture node through an
+                            // intermediate surface at 1x, which blurs tiles on HiDPI screens.
+                            snap.append_texture(&t.tex, &r);
                         }
                     }
                 }
@@ -1128,6 +1130,9 @@ impl DocView {
             }
         };
         if changed {
+            if crate::debug() {
+                eprintln!("request {:?}", all.iter().map(|j| (j.page, j.scale, j.tiles.len())).collect::<Vec<_>>());
+            }
             self.renderer().request(all);
         }
     }
@@ -1155,6 +1160,9 @@ impl DocView {
             let mut st = self.st();
             if r.generation != st.generation {
                 return;
+            }
+            if crate::debug() {
+                eprintln!("tile {:?} {}x{}", r.key, r.w, r.h);
             }
             let bytes = r.data.len();
             let gbytes = glib::Bytes::from_owned(r.data);

@@ -2,11 +2,11 @@
 Type=Application
 Name=docview
 GenericName=Document Viewer
-Comment=Minimal, low-memory PDF viewer
+Comment=Minimal, low-memory PDF and web page viewer
 Exec=docview %f
 Icon=docview
 Terminal=false
 Categories=Office;Viewer;Graphics;
-MimeType=application/pdf;application/x-pdf;
-Keywords=pdf;document;viewer;reader;
+MimeType=application/pdf;application/x-pdf;text/html;application/xhtml+xml;
+Keywords=pdf;html;document;viewer;reader;
 StartupWMClass=dev.docview.app

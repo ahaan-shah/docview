@@ -31,7 +31,8 @@ pub const COMMANDS: &[Command] = &[
     // File
     c("open", "Open file…", &["Ctrl+O"], Some("open"), "File"),
     c("open-recent", "Open recent…", &["Ctrl+Shift+R"], None, "File"),
-    c("reload", "Reload document", &["Ctrl+R"], None, "File"),
+    c("reload", "Reload document", &["Ctrl+R"], Some("refresh"), "File"),
+    c("open-external", "Open in web browser", &["Ctrl+Shift+B"], Some("external"), "File"),
     c("print", "Print…", &["Ctrl+Shift+P"], Some("print"), "File"),
     c("copy-path", "Copy file path", &[], None, "File"),
     c("properties", "Document properties", &["Ctrl+I"], None, "File"),
@@ -62,7 +63,7 @@ pub const COMMANDS: &[Command] = &[
     c("continuous", "Toggle continuous scrolling", &["C"], Some("continuous"), "View"),
     c("dual", "Toggle dual pages", &["D"], Some("dual"), "View"),
     c("cover", "Toggle cover page in dual mode", &["Shift+D"], None, "View"),
-    c("night", "Toggle night mode", &["I"], Some("night"), "View"),
+    c("night", "Toggle night mode", &["I", "Ctrl+Shift+N"], Some("night"), "View"),
     c("rotate-right", "Rotate clockwise", &["Ctrl+Right", "R"], None, "View"),
     c("rotate-left", "Rotate counterclockwise", &["Ctrl+Left", "Shift+R"], None, "View"),
     c("presentation", "Presentation mode", &["F5"], None, "View"),

@@ -1629,10 +1629,7 @@ impl DocView {
                 };
                 self.go_to_place(Place { page, y }, true);
             }
-            Target::Uri(u) => {
-                let root = self.root().and_downcast::<gtk::Window>();
-                gtk::UriLauncher::new(&u).launch(root.as_ref(), gio_none(), |_| {});
-            }
+            Target::Uri(u) => crate::launch_uri(self, &u),
             Target::File(f) => self.emit(Change::OpenFile(f)),
         }
     }
@@ -1983,8 +1980,4 @@ impl DocView {
         self.queue_draw();
         self.emit(Change::Annotations);
     }
-}
-
-fn gio_none() -> Option<&'static gtk::gio::Cancellable> {
-    None
 }

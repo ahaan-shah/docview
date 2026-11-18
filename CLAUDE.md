@@ -1,6 +1,6 @@
 # docview
 
-Minimal PDF viewer for Linux (Hyprland + pywal), sibling of `../allwrite` (same look, command
+Minimal PDF and HTML viewer for Linux (Hyprland + pywal), sibling of `../allwrite` (same look, command
 registry, palette, shortcut sheet, theme code). Rust + GTK 4 (gtk4-rs) + poppler-glib.
 Replaces GNOME Papers on this machine.
 
@@ -63,6 +63,7 @@ src/
                highlights (+ undo), history, rotation. Emits `Change` to the app.
   render.rs    worker thread with its own poppler::Document; renders 512px tiles on request
   layout.rs    pure page placement (continuous / single, dual / cover), fit zoom, rotation math
+  web.rs       HTML via WebKitGTK 6, dlopen'ed on first use (no build or install dependency)
   pdf.rs       poppler wrapper + FFI (links, outline, highlight annots, selection, atomic save)
   commands.rs  registry       keymap.rs  combos, GDK events, overrides
   ui.rs        modal layer, picker (palette), dialogs, shortcut sheet, toast
@@ -83,6 +84,14 @@ examples/make_sample.rs   generates the test / screenshot PDF
   ends): `pdf::render_without_highlights` calls `poppler_page_render_full` (looked up with
   dlsym, poppler >= 25.02; older poppler falls back to a plain render) and `render::draw`
   fills the quads with a multiply operator.
+- **Web pages** (`Kind::Html`): `web.rs` looks WebKit's C functions up with dlsym; properties and
+  signals go through plain GObject calls. The view is created on the first HTML open and
+  destroyed (its web process exits) when a PDF opens. `applies(id, kind)` in app.rs decides which
+  top-bar buttons and palette entries show; `App::run_web` handles commands for pages. Plain keys
+  go to the page. `lean_env` sets `__EGL_VENDOR_LIBRARY_FILENAMES=/dev/null` so WebKit does not
+  load GPU drivers + LLVM into docview (~55 MB); launch other programs with `launch_uri` /
+  `spawn_self`, which remove docview's env overrides. A hidden ws9 window does not repaint web
+  content, so snapshots show only the first frame of a page.
 - Do not `measure` a widget before it is in the window: it gets styled without the window's
   CSS (the shortcut sheet came out in a monospace font).
 - **The window's minimum size must stay small.** Hyprland tiles windows; if the content's minimum

@@ -29,6 +29,8 @@ const ICONS: &[(&str, &str)] = &[
     ("focus", include_str!("../data/icons/focus.svg")),
     ("case", include_str!("../data/icons/case.svg")),
     ("file", include_str!("../data/icons/file.svg")),
+    ("refresh", include_str!("../data/icons/refresh.svg")),
+    ("external", include_str!("../data/icons/external.svg")),
 ];
 
 pub fn svg(name: &str) -> Option<&'static str> {

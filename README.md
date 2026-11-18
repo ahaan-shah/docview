@@ -4,7 +4,7 @@
 
 # docview
 
-**A small, fast PDF viewer for Linux that stays out of your way.**
+**A small, fast PDF and web page viewer for Linux that stays out of your way.**
 
 Pages in the middle, two thin bars, and every action one key away. It renders
 in the background, keeps a small, capped cache, and uses no CPU while you read.
@@ -43,6 +43,25 @@ Hyprland, and runs on any Linux desktop.
 - Type a page number or label (`iv`, `12`) in the top bar, or press `Ctrl G`.
 - Go to any section of the outline (`Ctrl Shift O`) or any link on the page (`Ctrl Shift L`) from a searchable list.
 - Links work, with back and forward (`Alt ←` / `Alt →`) like a browser.
+
+**Web pages too.** Open an `.html` file and docview shows it with WebKit, the
+engine behind GNOME Web. The top bar switches to what a page needs:
+
+- Back and forward through the page's links.
+- Zoom (`Ctrl =` / `Ctrl -`, or `Ctrl` + wheel).
+- Night mode (`Ctrl Shift N`).
+- Find (`Ctrl F`).
+- Reload (`Ctrl R`).
+- Open in your browser (`Ctrl Shift B`).
+
+The page gets plain keys, so scrolling and typing into forms work as in a
+browser. Edit the file and the page reloads.
+
+WebKit is loaded only when you open a page. Reading PDFs never pays for it, and
+it closes again when you go back to a PDF. A page costs about 200 MB across
+docview and WebKit's processes, like a browser tab. This needs WebKitGTK 6:
+`webkitgtk-6.0` on Arch, `libwebkitgtk-6.0-4` on Debian and Ubuntu,
+`webkitgtk6.0` on Fedora. Without it, PDFs work as before.
 
 **Every action in one place.** All actions live in a single command
 registry, so the top bar buttons, keyboard shortcuts and the command palette

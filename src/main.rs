@@ -13,6 +13,7 @@ mod style;
 mod theme;
 mod ui;
 mod view;
+mod web;
 
 use gtk::prelude::*;
 use gtk::{gio, glib};
@@ -20,33 +21,64 @@ use std::rc::Rc;
 
 pub const APP_ID: &str = "dev.docview.app";
 
+/// Variables `lean_env` set (not the user): removed again for programs docview launches.
+static LEAN_VARS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
+
 /// Environment for a small footprint. Set before GTK starts; `DOCVIEW_GPU=1` skips it.
 fn lean_env() {
-    if std::env::var_os("DOCVIEW_GPU").is_some() {
-        return;
-    }
-    // SAFETY: called first thing in main, before any thread exists.
-    unsafe {
+    let mut set = Vec::new();
+    if std::env::var_os("DOCVIEW_GPU").is_none() {
+        let mut def = |k: &'static str, v: &str| {
+            if std::env::var_os(k).is_none() {
+                // SAFETY: called first thing in main, before any thread exists.
+                unsafe { std::env::set_var(k, v) };
+                set.push(k);
+            }
+        };
         // Software rendering: the GL / Vulkan renderers pull in the GPU driver stack (tens of
         // MB per process, and on hybrid laptops they wake the discrete GPU). Pages are
         // pre-rendered tiles, so compositing them in software is cheap.
-        if std::env::var_os("GSK_RENDERER").is_none() {
-            std::env::set_var("GSK_RENDERER", "cairo");
-        }
-        if std::env::var_os("GDK_DISABLE").is_none() {
-            std::env::set_var("GDK_DISABLE", "gl,vulkan,dmabuf");
-        }
+        def("GSK_RENDERER", "cairo");
+        def("GDK_DISABLE", "gl,vulkan,dmabuf");
+        // No EGL vendor libraries: WebKit (web pages) would otherwise load the GPU drivers
+        // and LLVM into this process (~55 MB) even with hardware acceleration off.
+        def("__EGL_VENDOR_LIBRARY_FILENAMES", "/dev/null");
         // No accessibility bus round-trips at startup when nothing listens.
-        if std::env::var_os("GTK_A11Y").is_none() && std::env::var_os("DOCVIEW_A11Y").is_none() {
-            std::env::set_var("GTK_A11Y", "none");
+        if std::env::var_os("DOCVIEW_A11Y").is_none() {
+            def("GTK_A11Y", "none");
         }
     }
+    let _ = LEAN_VARS.set(set);
     // glibc gives every thread that allocates its own arena and keeps freed tile memory in
     // them. Two arenas are plenty (the env var would be read too late, so set it directly).
     #[cfg(target_env = "gnu")]
     unsafe {
         libc::mallopt(libc::M_ARENA_MAX, 2);
     }
+}
+
+/// A new docview process for `path`, with the environment this one started with.
+pub fn spawn_self(path: &std::path::Path) {
+    let mut cmd = std::process::Command::new(std::env::current_exe().unwrap_or_else(|_| "docview".into()));
+    for v in LEAN_VARS.get().into_iter().flatten() {
+        cmd.env_remove(v);
+    }
+    let _ = cmd.arg(path).spawn();
+}
+
+/// Open a link in the user's default app (browser, mail, ...), without docview's
+/// rendering overrides in its environment.
+pub fn launch_uri(widget: &impl IsA<gtk::Widget>, uri: &str) {
+    let ctx = widget.display().app_launch_context();
+    for v in LEAN_VARS.get().into_iter().flatten() {
+        ctx.unsetenv(v);
+    }
+    let uri = uri.to_string();
+    glib::spawn_future_local(async move {
+        if let Err(e) = gio::AppInfo::launch_default_for_uri_future(&uri, Some(&ctx)).await {
+            eprintln!("docview: could not open {uri}: {e}");
+        }
+    });
 }
 
 /// Hand freed heap memory back to the system (after a burst of tile rendering or a search).
@@ -113,7 +145,7 @@ fn start(app: &Rc<app::App>, file: Option<std::path::PathBuf>) {
 }
 
 /// Test hooks that cost nothing when unset:
-/// DOCVIEW_RUN="cmd;cmd;type:text" runs command ids (or types into the focused entry) after
+/// DOCVIEW_RUN="cmd;cmd;type:text;open:/path" runs command ids (or types into the focused entry) after
 /// startup; DOCVIEW_SNAPSHOT=/path.png writes a PNG of the window after DOCVIEW_SNAPSHOT_DELAY ms.
 fn dev_hooks(app: &Rc<app::App>) {
     let delay: u64 = std::env::var("DOCVIEW_SNAPSHOT_DELAY").ok().and_then(|v| v.parse().ok()).unwrap_or(1500);
@@ -134,6 +166,8 @@ fn dev_hooks(app: &Rc<app::App>) {
                     if v.len() >= 2 {
                         a.simulate(n, (v[0], v[1]), (v.len() >= 4).then(|| (v[2], v[3])));
                     }
+                } else if let Some(p) = c.strip_prefix("open:") {
+                    a.open_path(std::path::Path::new(p), None);
                 } else if c == "enter:" {
                     if let Some(e) = focused_entry(&a) {
                         e.emit_activate();

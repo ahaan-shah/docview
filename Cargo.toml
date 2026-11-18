@@ -32,6 +32,7 @@ cairo-rs = { version = "0.22", features = ["pdf", "v1_18"] }
 maintainer = "Ahaan Shah"
 section = "graphics"
 depends = "libgtk-4-1 (>= 4.12), libpoppler-glib8"
+recommends = "libwebkitgtk-6.0-4"
 extended-description = "Minimal PDF viewer with tiled background rendering, text selection, highlights saved into the PDF, search, dual and continuous layouts, night mode and full keyboard control. Follows your pywal palette."
 assets = [
   ["target/release/docview", "usr/bin/", "755"],
@@ -48,3 +49,5 @@ assets = [
 [package.metadata.generate-rpm.requires]
 gtk4 = ">= 4.12"
 poppler-glib = "*"
+[package.metadata.generate-rpm.recommends]
+webkitgtk6.0 = "*"

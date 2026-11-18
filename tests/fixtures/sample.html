@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Field Guide to Quiet Software (web edition)</title>
+<style>
+  body { font: 17px/1.6 Georgia, "Noto Serif", serif; color: #1d1d1f; background: #fff; max-width: 42rem; margin: 3rem auto; padding: 0 1.5rem; }
+  h1 { font-size: 2.2rem; line-height: 1.2; margin-bottom: .2rem; }
+  .sub { color: #6e6e73; margin-top: 0; }
+  h2 { margin-top: 2.4rem; border-bottom: 1px solid #e5e5ea; padding-bottom: .3rem; }
+  nav a { margin-right: 1rem; }
+  code, pre { font-family: "JetBrains Mono", monospace; font-size: .85em; }
+  pre { background: #f5f5f7; padding: 1rem; border-radius: 8px; overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid #e5e5ea; }
+  .swatches { display: flex; gap: .8rem; margin: 1.2rem 0; }
+  .swatches div { flex: 1; height: 70px; border-radius: 6px; }
+  blockquote { border-left: 3px solid #4a7dfc; margin: 1.2rem 0; padding: .2rem 1rem; color: #3a3a3c; }
+</style>
+</head>
+<body>
+<h1>Field Guide to Quiet Software</h1>
+<p class="sub">A sample page for docview's web view.</p>
+<nav><a href="#reading">Reading</a><a href="#keys">Keys</a><a href="#numbers">Numbers</a><a href="sample.pdf">The PDF edition</a></nav>
+
+<h2 id="reading">1. Reading</h2>
+<p>Reading should feel like paper: the page in the middle, nothing moving unless you move it, and every action a keystroke away. A viewer for web pages should be no different. Scroll with the arrow keys or Space, zoom with Ctrl and plus or minus, and press Ctrl+F to search the page.</p>
+<blockquote>Software is quiet when it does what you asked, then gets out of the way.</blockquote>
+<p>Links work as in a browser. Back and forward follow your history, and a link to a PDF opens it in docview.</p>
+<div class="swatches"><div style="background:#e04f4f"></div><div style="background:#4fa86a"></div><div style="background:#4277dd"></div><div style="background:#e5b335"></div></div>
+
+<h2 id="keys">2. Keys</h2>
+<table>
+  <tr><th>Action</th><th>Keys</th></tr>
+  <tr><td>Find on the page</td><td><code>Ctrl F</code></td></tr>
+  <tr><td>Zoom in / out</td><td><code>Ctrl =</code> / <code>Ctrl -</code></td></tr>
+  <tr><td>Back / forward</td><td><code>Alt ←</code> / <code>Alt →</code></td></tr>
+  <tr><td>Night mode</td><td><code>Ctrl Shift N</code> or the moon button</td></tr>
+  <tr><td>Open in your web browser</td><td><code>Ctrl Shift B</code></td></tr>
+</table>
+
+<h2 id="numbers">3. Numbers</h2>
+<p>Pages are drawn by WebKit in its own process, loaded only when a web page is opened. Closing the page (or opening a PDF) ends that process.</p>
+<pre><code>fn main() {
+    println!("quiet by default");
+}</code></pre>
+<p><a href="#reading">Back to the top</a></p>
+</body>
+</html>

@@ -6,6 +6,7 @@ use crate::icons;
 use crate::keymap::{self, Keymap};
 use crate::layout::{Fit, Opts};
 use crate::pdf::{Doc, OpenError, Target};
+use crate::web;
 use crate::render::Recolor;
 use crate::state::{self, Position};
 use crate::style::{self, Palette};
@@ -25,8 +26,35 @@ const RIGHT: &[(&str, &[&str])] = &[
     ("zoom", &["zoom-out", "#zoom", "zoom-in"]),
     ("view", &["fit-width", "fit-page", "continuous", "dual", "night"]),
     ("tools", &["outline", "find", "highlight"]),
+    ("web", &["reload", "open-external"]),
     ("app", &["open", "palette", "settings"]),
 ];
+
+/// What the window shows. The top bar, palette and commands adapt to it.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Kind {
+    Empty,
+    Pdf,
+    Html,
+}
+
+/// Commands that only make sense for a PDF (hidden from the top bar and palette for web pages).
+const PDF_ONLY: &[&str] = &[
+    "goto-page", "outline", "next-page", "prev-page", "first-page", "last-page", "links", "scroll-down", "scroll-up",
+    "scroll-left", "scroll-right", "screen-down", "screen-up", "fit-width", "fit-page", "continuous", "dual", "cover",
+    "rotate-right", "rotate-left", "presentation", "highlight", "unhighlight", "undo", "redo", "highlights",
+];
+/// Commands that only make sense for a web page.
+const HTML_ONLY: &[&str] = &["open-external"];
+
+fn applies(id: &str, kind: Kind) -> bool {
+    match kind {
+        Kind::Html => !PDF_ONLY.contains(&id),
+        _ => !HTML_ONLY.contains(&id),
+    }
+}
+
+const WEB_ZOOMS: &[f64] = &[0.3, 0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0, 5.0];
 
 /// Theme slots offered as highlight colors (settings and the highlight button's menu).
 /// Names come from the actual color (`style::color_name`): pywal slots follow the wallpaper.
@@ -70,6 +98,14 @@ pub struct App {
     find_timer: RefCell<Option<glib::SourceId>>,
     /// View settings to restore when presentation mode ends.
     presenting: RefCell<Option<(Opts, Fit, f64)>>,
+    kind: Cell<Kind>,
+    /// The WebKit view, while a web page is shown. Dropped (and its process with it) when a
+    /// PDF is opened again.
+    web: RefCell<Option<Rc<web::Web>>>,
+    /// The HTML file being shown (follows local links).
+    web_path: RefCell<Option<PathBuf>>,
+    /// Web find: matches counted, -1 while unknown.
+    web_matches: Cell<i64>,
 }
 
 static PORTAL: std::sync::Mutex<theme::PortalState> =
@@ -294,6 +330,10 @@ impl App {
             focus_mode: Cell::new(false),
             find_timer: RefCell::new(None),
             presenting: RefCell::new(None),
+            kind: Cell::new(Kind::Empty),
+            web: RefCell::new(None),
+            web_path: RefCell::new(None),
+            web_matches: Cell::new(-1),
         });
         app.wire(&prev, &next, &close);
         app.apply_theme();
@@ -302,6 +342,7 @@ impl App {
         app.refresh_tooltips();
         app.build_empty();
         app.apply_bars();
+        app.apply_kind();
         app.refresh();
         app
     }
@@ -401,7 +442,7 @@ impl App {
                     }
                     a.start_find();
                 } else {
-                    a.view.find_step(1);
+                    a.find_step(1);
                 }
             });
         }
@@ -503,22 +544,27 @@ impl App {
         if avail <= 0 {
             return;
         }
-        let order: [&dyn Fn(bool); 5] = [
-            &|v| self.group("view").set_visible(v),
-            &|v| self.group("tools").set_visible(v),
-            &|v| self.group("zoom").set_visible(v),
-            &|v| self.pagebox.set_visible(v),
-            &|v| self.buttons["forward"].set_visible(v),
+        let html = self.is_web();
+        // Least needed first; the bool says whether it belongs to this kind of document.
+        let order: [(gtk::Widget, bool); 6] = [
+            (self.group("view").clone().upcast(), true),
+            (self.group("web").clone().upcast(), html),
+            (self.group("tools").clone().upcast(), true),
+            (self.group("zoom").clone().upcast(), true),
+            (self.pagebox.clone().upcast(), !html),
+            (self.buttons["forward"].clone().upcast(), true),
         ];
-        for f in &order {
-            f(true);
+        for (w, ok) in &order {
+            w.set_visible(*ok);
         }
-        for f in &order {
+        for (w, ok) in &order {
             // The filename is ellipsized; leave it room for a few characters.
             if self.bar.measure(gtk::Orientation::Horizontal, -1).1 + 60 <= avail {
                 break;
             }
-            f(false);
+            if *ok {
+                w.set_visible(false);
+            }
         }
     }
 
@@ -562,7 +608,7 @@ impl App {
                 return glib::Propagation::Stop;
             }
             if in_find && (combo == "Shift+Enter" || combo == "Down" || combo == "Up") {
-                self.view.find_step(if combo == "Shift+Enter" || combo == "Up" { -1 } else { 1 });
+                self.find_step(if combo == "Shift+Enter" || combo == "Up" { -1 } else { 1 });
                 return glib::Propagation::Stop;
             }
             // Plain typing and the usual text editing keys stay with the entry.
@@ -572,6 +618,16 @@ impl App {
             ];
             let plain = !combo.starts_with("Ctrl+") && !combo.starts_with("Alt+") && !(combo.starts_with('F') && combo.len() <= 3);
             if plain || editing.contains(&combo.as_str()) {
+                return glib::Propagation::Proceed;
+            }
+        }
+        if self.is_web() {
+            // A web page gets typing, scrolling and editing keys, like in a browser; docview
+            // keeps its Ctrl / Alt / F-key commands.
+            let plain = !combo.starts_with("Ctrl+") && !combo.starts_with("Alt+") && !(combo.starts_with('F') && combo.len() <= 3);
+            let editing = ["Ctrl+C", "Ctrl+V", "Ctrl+X", "Ctrl+A", "Ctrl+Z", "Ctrl+Shift+Z", "Ctrl+Y"];
+            let ours = combo == "Escape" && (self.findbar.is_visible() || self.focus_mode.get() || self.window.is_fullscreen());
+            if (plain && !ours) || editing.contains(&combo.as_str()) {
                 return glib::Propagation::Proceed;
             }
         }
@@ -610,6 +666,9 @@ impl App {
             find: f(pal.c[3], 0.4),
             find_current: f(pal.accent, 0.45),
         };
+        if let Some(w) = self.web() {
+            w.set_night(night);
+        }
         let recolor = night.then_some(Recolor { bg: pal.bg, fg: pal.fg });
         self.view.set_colors(colors, recolor);
         let hl = self.config.borrow().app.highlight.clone();
@@ -714,9 +773,15 @@ impl App {
 
     pub fn open_path(self: &Rc<Self>, path: &Path, password: Option<String>) {
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if web::is_html(&path) {
+            self.open_html(&path);
+            return;
+        }
         match Doc::open(&path, password.as_deref()) {
             Ok(doc) => {
                 self.save_position();
+                self.drop_web();
+                self.set_kind(Kind::Pdf);
                 let pos = if self.config.borrow().app.restore_position { self.state.borrow().position(&path).cloned() } else { None };
                 if let Some(p) = &pos {
                     let opts = Opts { continuous: p.continuous, dual: p.dual, cover: self.view.opts().cover };
@@ -768,6 +833,247 @@ impl App {
             }
             Err(e) => self.toast.show(&format!("Could not open {}: {e}", home_short(&path))),
         }
+    }
+
+    // ---------------------------------------------------------------- web pages
+
+    fn is_web(&self) -> bool {
+        self.kind.get() == Kind::Html
+    }
+
+    fn web(&self) -> Option<Rc<web::Web>> {
+        self.web.borrow().clone()
+    }
+
+    /// The file on screen, PDF or HTML.
+    fn current_path(&self) -> Option<PathBuf> {
+        match self.kind.get() {
+            Kind::Html => self.web_path.borrow().clone(),
+            _ => self.view.doc().map(|d| d.path.clone()),
+        }
+    }
+
+    fn set_kind(self: &Rc<Self>, kind: Kind) {
+        if self.kind.replace(kind) != kind {
+            self.apply_kind();
+            self.queue_responsive();
+        }
+    }
+
+    /// Show the top-bar buttons that apply to what is on screen.
+    fn apply_kind(&self) {
+        let kind = self.kind.get();
+        for (id, b) in &self.buttons {
+            b.set_visible(applies(id, kind));
+        }
+        let html = kind == Kind::Html;
+        self.group("web").set_visible(html);
+        self.pagebox.set_visible(!html);
+        let focus: gtk::Widget = match self.web() {
+            Some(w) if html => w.widget.clone(),
+            _ => self.view.clone().upcast(),
+        };
+        self.modal.return_focus.replace(Some(focus));
+    }
+
+    fn set_zoom(&self, z: f64) {
+        match self.web() {
+            Some(w) => w.set_zoom(z),
+            None => self.view.set_zoom(z, None),
+        }
+        self.refresh();
+    }
+
+    /// Create the web view on first use. None when WebKitGTK is not installed.
+    fn ensure_web(self: &Rc<Self>) -> Option<Rc<web::Web>> {
+        if let Some(w) = self.web() {
+            return Some(w);
+        }
+        let w = Rc::new(web::Web::new()?);
+        self.stack.add_named(&w.widget, Some("web"));
+        let a = Rc::downgrade(self);
+        w.connect_changed(move || {
+            if let Some(a) = a.upgrade() {
+                a.on_web_change();
+            }
+        });
+        let a = Rc::downgrade(self);
+        w.connect_find(move |n| {
+            if let Some(a) = a.upgrade() {
+                a.web_matches.set(n.map(i64::from).unwrap_or(0));
+                a.refresh_find();
+            }
+        });
+        let a = Rc::downgrade(self);
+        w.connect_hover(move |link| {
+            if let Some(a) = a.upgrade() {
+                a.hover.replace(link);
+                a.refresh_status();
+            }
+        });
+        // A link to a local PDF opens in a docview window, like a PDF link to another file.
+        let a = Rc::downgrade(self);
+        w.connect_links(move |uri| {
+            let Some(a) = a.upgrade() else { return false };
+            let Some(p) = uri.starts_with("file:").then(|| gio::File::for_uri(uri).path()).flatten() else { return false };
+            if web::is_html(&p) || !p.is_file() {
+                return false;
+            }
+            a.on_view_change(Change::OpenFile(p.to_string_lossy().to_string()));
+            true
+        });
+        // Ctrl + wheel zooms, as on a PDF.
+        let scroll = gtk::EventControllerScroll::new(gtk::EventControllerScrollFlags::VERTICAL | gtk::EventControllerScrollFlags::DISCRETE);
+        scroll.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let a = Rc::downgrade(self);
+        scroll.connect_scroll(move |c, _, dy| {
+            let Some(a) = a.upgrade() else { return glib::Propagation::Proceed };
+            if !c.current_event_state().contains(gdk::ModifierType::CONTROL_MASK) || dy == 0.0 {
+                return glib::Propagation::Proceed;
+            }
+            a.run(if dy < 0.0 { "zoom-in" } else { "zoom-out" });
+            glib::Propagation::Stop
+        });
+        w.widget.add_controller(scroll);
+        w.set_night(self.config.borrow().view.night);
+        self.web.replace(Some(w.clone()));
+        Some(w)
+    }
+
+    /// Back to PDFs: destroy the web view, which ends its web process.
+    fn drop_web(&self) {
+        if let Some(w) = self.web.take() {
+            self.stack.remove(&w.widget);
+            self.web_path.replace(None);
+            self.hover.replace(None);
+        }
+    }
+
+    fn open_html(self: &Rc<Self>, path: &Path) {
+        let Some(w) = self.ensure_web() else {
+            self.toast.show("Web pages need WebKitGTK 6 (package webkitgtk-6.0 or libwebkitgtk-6.0-4)");
+            return;
+        };
+        self.save_position();
+        self.view.set_doc(None, None);
+        if self.findbar.is_visible() {
+            self.close_find();
+        }
+        self.web_path.replace(Some(path.to_path_buf()));
+        w.load_file(path);
+        {
+            let mut st = self.state.borrow_mut();
+            st.touch_recent(path);
+            st.save();
+        }
+        self.stack.set_visible_child_name("web");
+        self.set_kind(Kind::Html);
+        self.apply_kind();
+        self.watch_file(path);
+        w.widget.grab_focus();
+        self.refresh();
+    }
+
+    fn on_web_change(self: &Rc<Self>) {
+        let Some(w) = self.web() else { return };
+        // Following a link to another local page: watch that file instead.
+        if let Some(p) = w.path()
+            && self.web_path.borrow().as_ref() != Some(&p)
+            && p.is_file() {
+                self.web_path.replace(Some(p.clone()));
+                self.watch_file(&p);
+            }
+        self.refresh();
+    }
+
+    fn refresh_web(&self) {
+        let Some(w) = self.web() else { return };
+        let path = self.web_path.borrow().clone();
+        let file = path.as_ref().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().to_string());
+        let name = w.title().or(file).unwrap_or_else(|| w.uri().unwrap_or_default());
+        self.filename.set_text(&name);
+        let tip = path.as_deref().map(home_short).or_else(|| w.uri());
+        self.filename.set_tooltip_text(tip.as_deref());
+        self.window.set_title(Some(&format!("{name} - docview")));
+        self.zoom_btn.set_label(&format!("{}%", (w.zoom() * 100.0).round()));
+        self.zoom_btn.set_sensitive(true);
+        for (id, b) in &self.buttons {
+            let on = match *id {
+                "night" => self.config.borrow().view.night,
+                "find" => self.findbar.reveals_child(),
+                _ => false,
+            };
+            if on { b.add_css_class("active") } else { b.remove_css_class("active") }
+            b.set_sensitive(match *id {
+                "back" => w.can_go_back(),
+                "forward" => w.can_go_forward(),
+                _ => true,
+            });
+        }
+        self.refresh_status();
+    }
+
+    /// Commands for a web page. False: not handled here, so `run` does the usual thing
+    /// (window, theme and app commands are the same for both kinds).
+    fn run_web(self: &Rc<Self>, id: &str) -> bool {
+        let Some(w) = self.web() else { return false };
+        match id {
+            "reload" => self.reload(true),
+            "open-external" => {
+                if let Some(uri) = w.uri() {
+                    crate::launch_uri(&self.window, &uri);
+                }
+            }
+            "print" => w.print(self.window.upcast_ref()),
+            "copy-path" => {
+                let text = self.web_path.borrow().as_ref().map(|p| p.to_string_lossy().to_string()).or_else(|| w.uri());
+                if let Some(t) = text {
+                    self.view.clipboard().set_text(&t);
+                    self.toast.show("Path copied");
+                }
+            }
+            "properties" => {
+                let mut lines = Vec::new();
+                if let Some(t) = w.title() {
+                    lines.push(format!("Title:  {t}"));
+                }
+                if let Some(p) = self.web_path.borrow().as_ref() {
+                    if let Ok(m) = std::fs::metadata(p) {
+                        lines.push(format!("File size:  {:.1} KB", m.len() as f64 / 1024.0));
+                    }
+                    lines.push(format!("Location:  {}", home_short(p)));
+                } else if let Some(u) = w.uri() {
+                    lines.push(format!("Address:  {u}"));
+                }
+                ui::ask(&self.modal, &lines.join("\n"), vec![("Close", true, Rc::new(|| {}))]);
+            }
+            "back" => w.back(),
+            "forward" => w.forward(),
+            "zoom-in" | "zoom-out" => {
+                let z = w.zoom();
+                let next = if id == "zoom-in" {
+                    WEB_ZOOMS.iter().copied().find(|s| *s > z + 0.001).unwrap_or(5.0)
+                } else {
+                    WEB_ZOOMS.iter().rev().copied().find(|s| *s < z - 0.001).unwrap_or(0.3)
+                };
+                w.set_zoom(next);
+            }
+            "zoom-reset" => w.set_zoom(1.0),
+            "zoom-pick" => self.pick_zoom(),
+            "find" => self.open_find(),
+            "find-next" => {
+                if self.findbar.is_visible() { w.find_step(1) } else { self.open_find() }
+            }
+            "find-prev" => w.find_step(-1),
+            "copy" => w.editing("Copy"),
+            "select-all" => w.editing("SelectAll"),
+            id if !applies(id, Kind::Html) => {
+                let label = commands::get(id).map(|c| c.label.trim_end_matches('…')).unwrap_or(id);
+                self.toast.show(&format!("{label}: only for PDFs"));
+            }
+            _ => return false,
+        }
+        true
     }
 
     fn save_position(&self) {
@@ -834,6 +1140,13 @@ impl App {
     }
 
     fn reload(&self, forced: bool) {
+        if let Some(w) = self.web() {
+            w.reload();
+            if forced {
+                self.toast.show("Reloaded");
+            }
+            return;
+        }
         let Some(doc) = self.view.doc() else { return };
         let meta = std::fs::metadata(&doc.path).ok();
         let stamp = meta.as_ref().and_then(|m| Some((m.modified().ok()?, m.len())));
@@ -877,7 +1190,7 @@ impl App {
                 let base = self.view.doc().and_then(|d| d.path.parent().map(Path::to_path_buf)).unwrap_or_default();
                 let p = if Path::new(&f).is_absolute() { PathBuf::from(&f) } else { base.join(&f) };
                 if p.exists() {
-                    let _ = std::process::Command::new(std::env::current_exe().unwrap_or_else(|_| "docview".into())).arg(&p).spawn();
+                    crate::spawn_self(&p);
                 } else {
                     self.toast.show(&format!("Not found: {}", home_short(&p)));
                 }
@@ -886,6 +1199,10 @@ impl App {
     }
 
     fn refresh(&self) {
+        if self.is_web() {
+            self.refresh_web();
+            return;
+        }
         let doc = self.view.doc();
         let has = doc.is_some();
         match &doc {
@@ -944,6 +1261,16 @@ impl App {
     }
 
     fn refresh_status(&self) {
+        if let Some(w) = self.web() {
+            let left = self.hover.borrow().clone().unwrap_or_else(|| if w.is_loading() { "Loading…".into() } else { w.title().unwrap_or_default() });
+            self.status_left.set_text(&left);
+            let mut parts = vec![format!("{}%", (w.zoom() * 100.0).round())];
+            if self.config.borrow().view.night {
+                parts.push("night".into());
+            }
+            self.status_right.set_text(&parts.join(" · "));
+            return;
+        }
         let Some(doc) = self.view.doc() else {
             self.status_left.set_text("");
             self.status_right.set_text("");
@@ -982,6 +1309,19 @@ impl App {
     }
 
     fn refresh_find(&self) {
+        if self.is_web() {
+            let n = self.web_matches.get();
+            let text = match n {
+                _ if self.find_entry.text().is_empty() => String::new(),
+                -1 => "Searching…".into(),
+                0 => "No matches".into(),
+                1 => "1 match".into(),
+                n if n >= 1000 => "1000+ matches".into(),
+                n => format!("{n} matches"),
+            };
+            self.find_count.set_text(&text);
+            return;
+        }
         let (cur, total, running) = self.view.find_status();
         let text = if self.find_entry.text().is_empty() {
             String::new()
@@ -1022,7 +1362,7 @@ impl App {
         title.add_css_class("title");
         let km = self.keymap.borrow();
         let key = km.first_key(commands::get("open").unwrap()).unwrap_or_default();
-        let hint = gtk::Label::new(Some(&format!("Open a PDF with {key}, or drop one here")));
+        let hint = gtk::Label::new(Some(&format!("Open a PDF or web page with {key}, or drop one here")));
         hint.add_css_class("hint");
         hint.set_wrap(true);
         hint.set_justify(gtk::Justification::Center);
@@ -1074,13 +1414,31 @@ impl App {
     fn close_find(&self) {
         self.findbar.set_reveal_child(false);
         self.findbar.set_visible(false);
-        self.view.clear_find();
-        self.view.grab_focus();
+        if let Some(w) = self.web() {
+            w.find_finish();
+            w.widget.grab_focus();
+        } else {
+            self.view.clear_find();
+            self.view.grab_focus();
+        }
         self.refresh();
     }
 
     fn start_find(&self) {
+        if let Some(w) = self.web() {
+            self.web_matches.set(-1);
+            w.find(&self.find_entry.text(), self.find_case.is_active());
+            self.refresh_find();
+            return;
+        }
         self.view.find(&self.find_entry.text(), self.find_case.is_active());
+    }
+
+    fn find_step(&self, dir: i32) {
+        match self.web() {
+            Some(w) => w.find_step(dir),
+            None => self.view.find_step(dir),
+        }
     }
 
     // ---------------------------------------------------------------- commands
@@ -1088,6 +1446,10 @@ impl App {
     pub fn run(self: &Rc<Self>, id: &str) {
         if crate::debug() {
             eprintln!("run {id}");
+        }
+        if self.is_web() && self.run_web(id) {
+            self.refresh();
+            return;
         }
         let has = self.view.doc().is_some();
         let v = &self.view;
@@ -1252,18 +1614,34 @@ impl App {
     fn choose_file(self: &Rc<Self>) {
         let dialog = gtk::FileDialog::new();
         dialog.set_title("Open document");
-        let filter = gtk::FileFilter::new();
-        filter.set_name(Some("PDF documents"));
-        filter.add_mime_type("application/pdf");
-        filter.add_suffix("pdf");
+        let docs = gtk::FileFilter::new();
+        docs.set_name(Some("Documents (PDF, HTML)"));
+        let pdf = gtk::FileFilter::new();
+        pdf.set_name(Some("PDF documents"));
+        let html = gtk::FileFilter::new();
+        html.set_name(Some("Web pages"));
+        for (f, mimes, exts) in [
+            (&pdf, &["application/pdf"][..], &["pdf"][..]),
+            (&html, &["text/html", "application/xhtml+xml"][..], &["html", "htm", "xhtml"][..]),
+        ] {
+            for m in mimes {
+                f.add_mime_type(m);
+                docs.add_mime_type(m);
+            }
+            for e in exts {
+                f.add_suffix(e);
+                docs.add_suffix(e);
+            }
+        }
         let all = gtk::FileFilter::new();
         all.set_name(Some("All files"));
         all.add_pattern("*");
         let filters = gio::ListStore::new::<gtk::FileFilter>();
-        filters.append(&filter);
-        filters.append(&all);
+        for f in [&docs, &pdf, &html, &all] {
+            filters.append(f);
+        }
         dialog.set_filters(Some(&filters));
-        if let Some(dir) = self.view.doc().and_then(|d| d.path.parent().map(Path::to_path_buf)) {
+        if let Some(dir) = self.current_path().and_then(|p| p.parent().map(Path::to_path_buf)) {
             dialog.set_initial_folder(Some(&gio::File::for_path(dir)));
         }
         let w = Rc::downgrade(self);
@@ -1276,7 +1654,7 @@ impl App {
     }
 
     fn pick_recent(self: &Rc<Self>) {
-        let cur = self.view.doc().map(|d| d.path.clone());
+        let cur = self.current_path();
         let items: Vec<Item> = self
             .state
             .borrow()
@@ -1392,7 +1770,8 @@ impl App {
 
     fn pick_zoom(self: &Rc<Self>) {
         let mut items = Vec::new();
-        for (label, fit) in [("Fit width", Fit::Width), ("Fit page", Fit::Page)] {
+        let fits: &[(&str, Fit)] = if self.is_web() { &[] } else { &[("Fit width", Fit::Width), ("Fit page", Fit::Page)] };
+        for &(label, fit) in fits {
             let w = Rc::downgrade(self);
             items.push(Item::new(label, None, move || {
                 if let Some(a) = w.upgrade() {
@@ -1405,8 +1784,7 @@ impl App {
             let w = Rc::downgrade(self);
             items.push(Item::new(format!("{z}%"), None, move || {
                 if let Some(a) = w.upgrade() {
-                    a.view.set_zoom(z as f64 / 100.0, None);
-                    a.refresh();
+                    a.set_zoom(z as f64 / 100.0);
                 }
             }));
         }
@@ -1415,8 +1793,7 @@ impl App {
             let Some(a) = w.upgrade() else { return false };
             match t.trim().trim_end_matches('%').trim().parse::<f64>() {
                 Ok(z) if z > 0.0 => {
-                    a.view.set_zoom(z / 100.0, None);
-                    a.refresh();
+                    a.set_zoom(z / 100.0);
                     true
                 }
                 _ => false,
@@ -1568,7 +1945,8 @@ impl App {
     fn palette(self: &Rc<Self>) {
         let km = self.keymap.borrow();
         let mut items = Vec::new();
-        for c in COMMANDS.iter().filter(|c| !c.hidden) {
+        let kind = self.kind.get();
+        for c in COMMANDS.iter().filter(|c| !c.hidden && applies(c.id, kind)) {
             let w = Rc::downgrade(self);
             let id = c.id;
             items.push(Item::command(c.label, km.first_key(c), move || {
@@ -1577,7 +1955,7 @@ impl App {
                 }
             }));
         }
-        let cur = self.view.doc().map(|d| d.path.clone());
+        let cur = self.current_path();
         for p in self.state.borrow().recent_existing().into_iter().filter(|p| Some(p) != cur.as_ref()).take(10) {
             let w = Rc::downgrade(self);
             items.push(Item::new(format!("Recent: {}", home_short(&p)), None, move || {

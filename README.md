@@ -17,7 +17,8 @@ in the background, keeps a small, capped cache, and uses no CPU while you read.
 
 docview is built with Rust, [GTK 4](https://gtk.org) and
 [poppler](https://poppler.freedesktop.org), the same PDF engine GNOME's
-Papers uses. It is part of the same family as
+Papers uses. Web pages are shown with [WebKitGTK](https://webkitgtk.org), the
+engine behind GNOME Web. It is part of the same family as
 [allwrite](https://github.com/ahaan-shah/allwrite): the same look, the same
 command palette and shortcut sheet, and it follows your
 [pywal](https://github.com/dylanaraps/pywal) colours live. It was made for
@@ -116,7 +117,9 @@ docview needs **GTK 4** and **poppler-glib**, which most desktops already have:
 | Debian / Ubuntu | `libgtk-4-1 libpoppler-glib8` |
 | Fedora | `gtk4 poppler-glib` |
 
-Optional: `python-pywal` (or `pywal16`) for live colours.
+Optional:
+- WebKitGTK 6 to open HTML files: `webkitgtk-6.0` on Arch, `libwebkitgtk-6.0-4` on Debian and Ubuntu, `webkitgtk6.0` on Fedora. The `.deb` and `.rpm` packages recommend it.
+- `python-pywal` (or `pywal16`) for live colours.
 
 ### Debian, Ubuntu and Fedora packages
 
@@ -154,7 +157,7 @@ cd docview/packaging && makepkg -si
 | `Ctrl =` / `=` · `Ctrl -` / `-` · `Ctrl 0` · `Z` | Zoom in · out · 100% · zoom to… |
 | `W` · `F` | Fit width · fit page |
 | `C` · `D` · `Shift D` | Continuous · dual pages · cover page |
-| `I` | Night mode |
+| `I` / `Ctrl Shift N` | Night mode |
 | `Ctrl Shift T` | Color mode: system (pywal), light, dark |
 | `Ctrl B` | Show or hide the top bar |
 | `R` · `Shift R` | Rotate clockwise · counterclockwise |
@@ -167,6 +170,15 @@ cd docview/packaging && makepkg -si
 | `Esc` | Clear the selection, close find, leave presentation |
 | `Ctrl W` / `Ctrl Q` | Close |
 
+On a web page, keys without `Ctrl` or `Alt` go to the page, as in a browser:
+arrows, `Space` and `PgDn` scroll, and you can type into forms. Shortcuts with
+`Ctrl`, `Alt` or an F-key work as above, plus:
+
+| Keys | Does |
+|---|---|
+| `Ctrl Shift B` | Open the page in your web browser |
+| `Ctrl` + wheel | Zoom |
+
 Any shortcut can be changed in the config file (see below).
 
 ### From the command line
@@ -174,6 +186,14 @@ Any shortcut can be changed in the config file (see below).
 ```bash
 docview                  # recent documents
 docview paper.pdf        # open a document
+docview notes.html       # open a web page
+```
+
+To make docview the default for web pages too (it does not become the
+default for anything on its own):
+
+```bash
+xdg-mime default docview.desktop text/html
 ```
 
 ## Settings
@@ -211,15 +231,17 @@ Command ids are listed in [`src/commands.rs`](src/commands.rs).
 
 ## Your data
 
-There's no account, no telemetry and no update check, and docview never
-touches the network. It keeps a list of recent files and your place in each
+There's no account, no telemetry and no update check. Reading PDFs never
+touches the network. A web page loads what it links to (images, fonts, other
+pages), as it would in a browser. docview keeps a list of recent files and your place in each
 document in `~/.local/state/docview/state.json`.
 
 ## Building from source
 
 You need Rust (stable) and the GTK 4 and poppler-glib development files
 (Arch: `gtk4 poppler-glib`; Debian / Ubuntu: `libgtk-4-dev libpoppler-glib-dev`;
-Fedora: `gtk4-devel poppler-glib-devel`).
+Fedora: `gtk4-devel poppler-glib-devel`). WebKitGTK isn't needed to build:
+docview loads it at run time, the first time a web page is opened.
 
 ```bash
 cargo build --release          # target/release/docview

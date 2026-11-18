@@ -33,6 +33,12 @@ do not create outputs, nested compositors or extra X servers (it disrupts their 
   restyles it after mapping. The `DOCVIEW_SNAPSHOT` hook therefore allocates the window content
   itself at `DOCVIEW_SIZE` and renders offscreen. Consequences: CSS state changes made after
   startup (`.active` buttons) can look stale in shots, and real input cannot be tested there.
+- Real keys without touching focus: `hyprctl dispatch 'hl.dsp.send_shortcut({ mods = "CTRL",
+  key = "minus", window = "class:dev.docview.app" })'` delivers a key to the ws9 window. Run with
+  `DOCVIEW_DEBUG=1` (logs `key`, `press`, `run`, `draw`) and `DOCVIEW_SNAPSHOT_DELAY` long enough
+  to capture the result. Dev hooks (`DOCVIEW_RUN`) call `App::run` directly and bypass input:
+  never treat them as proof that buttons or keys work.
+- `DOCVIEW_NODE=file` (with a snapshot) dumps the GSK render-node tree.
 - Snapshots force their own layout, so they **cannot** catch bugs where GTK's frame clock stops.
   `DOCVIEW_DEBUG=1` with `DOCVIEW_RUN` prints the window size vs. its minimum size: keep the
   minimum well below any tile size (see below).
@@ -69,6 +75,10 @@ examples/make_sample.rs   generates the test / screenshot PDF
 
 ## Things that are easy to get wrong
 
+- **`App` lives in `main.rs`'s `APPS` list.** Every handler holds a `Weak<App>`; without that
+  strong reference all buttons and shortcuts silently do nothing.
+- **Use `append_texture` for full-resolution tiles**, not `append_scaled_texture`: the cairo
+  renderer draws scaled-texture nodes through a 1x intermediate, which blurs pages on HiDPI.
 - **The window's minimum size must stay small.** Hyprland tiles windows; if the content's minimum
   size is bigger than the tile, GTK asks for a resize that never comes and stops drawing and
   handling input (the app looks frozen and pages stay as blurry previews). The top bar sits in a

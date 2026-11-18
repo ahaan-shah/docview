@@ -55,9 +55,11 @@ registry, so the top bar buttons, keyboard shortcuts and the command palette
 </tr>
 </table>
 
-**Your colours, live.** docview reads pywal's `colors.json` and recolours the
-moment your wallpaper changes, with no restart. Without pywal it follows your
-desktop's light or dark preference and accent colour through the XDG portal.
+**Your colours, live.** Three colour modes: system, light and dark
+(`Ctrl Shift T` or settings). In system mode docview reads pywal's `colors.json`
+and recolours the moment your wallpaper changes, with no restart; without pywal
+it follows your desktop's light or dark preference and accent colour through
+the XDG portal.
 
 **Light on your computer.**
 - With a 1,300-page book open it uses about **60 MB** of memory, and stays around 100–120 MB while you scroll, zoom and search through it. Rendered tiles live in a cache capped at 48 MB (`cache_mb`).
@@ -122,7 +124,7 @@ cd docview/packaging && makepkg -si
 | `Ctrl O` · `Ctrl Shift R` · `Ctrl R` | Open · open recent · reload |
 | `Ctrl P` | Command palette |
 | `Ctrl ,` | Settings |
-| `Ctrl /` | All shortcuts |
+| `Ctrl K` or `Ctrl /` | All shortcuts |
 | `↑` `↓` `←` `→` or `J` `K` `H` `L` | Scroll |
 | `Space` · `Shift Space` · `PgDn` · `PgUp` | Scroll a screen |
 | `N` · `P` | Next · previous page |
@@ -134,6 +136,8 @@ cd docview/packaging && makepkg -si
 | `W` · `F` | Fit width · fit page |
 | `C` · `D` · `Shift D` | Continuous · dual pages · cover page |
 | `I` | Night mode |
+| `Ctrl Shift T` | Color mode: system (pywal), light, dark |
+| `Ctrl B` | Show or hide the top bar |
 | `R` · `Shift R` | Rotate clockwise · counterclockwise |
 | `F5` · `F11` · `Ctrl Shift F` | Presentation · fullscreen · focus mode |
 | `Ctrl F` or `/` · `F3` / `Shift F3` | Find · next / previous match |
@@ -173,6 +177,8 @@ restore_position = true
 highlight = "color3"     # pywal slot (color1..color15, accent) or "#rrggbb"
 font = "Inter"           # UI font
 cache_mb = 48            # memory for rendered pages
+mode = "system"          # "system" (pywal, else desktop light/dark), "light" or "dark"
+topbar = true
 
 [keys]                   # command id = key combo; several: "H, Ctrl+H"
 highlight = "Ctrl+H"

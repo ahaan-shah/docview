@@ -104,7 +104,7 @@ fn key_name(kv: gdk::Key) -> Option<String> {
 /// Combo for a key press, or None for bare modifiers. `unshifted` is the level-0 keyval for the
 /// same physical key, so Ctrl+Shift+= works whatever character Shift produces.
 pub fn combo_from_event(kv: gdk::Key, unshifted: Option<gdk::Key>, state: gdk::ModifierType) -> Option<String> {
-    let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK) || state.contains(gdk::ModifierType::META_MASK);
+    let ctrl = state.contains(gdk::ModifierType::CONTROL_MASK);
     let alt = state.contains(gdk::ModifierType::ALT_MASK);
     let shift = state.contains(gdk::ModifierType::SHIFT_MASK);
     // Letters use the layout's own keyval; everything else uses the unshifted key.

@@ -418,6 +418,17 @@ impl App {
             });
         }
         self.window.add_controller(keys);
+        if crate::debug() {
+            let c = gtk::GestureClick::new();
+            c.set_button(0);
+            c.set_propagation_phase(gtk::PropagationPhase::Capture);
+            let win = self.window.clone();
+            c.connect_pressed(move |_, n, x, y| {
+                let target = win.pick(x, y, gtk::PickFlags::DEFAULT).map(|w| w.type_().name().to_string());
+                eprintln!("press n={n} at {x:.0},{y:.0} on {target:?}");
+            });
+            self.window.add_controller(c);
+        }
         // Drag and drop files onto the window.
         let drop = gtk::DropTarget::new(gdk::FileList::static_type(), gdk::DragAction::COPY);
         {
@@ -509,6 +520,9 @@ impl App {
             .map_keycode(code)
             .and_then(|v| v.into_iter().find(|(k, _)| k.group() == c.group() as i32 && k.level() == 0).map(|(_, kv)| kv));
         let Some(combo) = keymap::combo_from_event(kv, unshifted, state) else { return glib::Propagation::Proceed };
+        if crate::debug() {
+            eprintln!("key {combo} -> {:?}", self.keymap.borrow().lookup(&combo));
+        }
         if self.modal.is_open() {
             if combo == "Escape" {
                 self.modal.close();
@@ -1054,6 +1068,9 @@ impl App {
     // ---------------------------------------------------------------- commands
 
     pub fn run(self: &Rc<Self>, id: &str) {
+        if crate::debug() {
+            eprintln!("run {id}");
+        }
         let has = self.view.doc().is_some();
         let v = &self.view;
         match id {

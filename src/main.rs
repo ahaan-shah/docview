@@ -57,6 +57,12 @@ pub fn trim_heap() {
     }
 }
 
+/// DOCVIEW_DEBUG=1: log commands, layout and drawing to stderr.
+pub fn debug() -> bool {
+    static D: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *D.get_or_init(|| std::env::var_os("DOCVIEW_DEBUG").is_some())
+}
+
 pub static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 
 fn main() -> glib::ExitCode {
@@ -77,7 +83,17 @@ fn main() -> glib::ExitCode {
     gapp.run()
 }
 
+thread_local! {
+    /// Open windows. Every signal handler holds only a weak reference to its `App`, so this
+    /// list is what keeps each one alive; an entry is dropped when its window is destroyed.
+    static APPS: std::cell::RefCell<Vec<Rc<app::App>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 fn start(app: &Rc<app::App>, file: Option<std::path::PathBuf>) {
+    APPS.with(|a| a.borrow_mut().push(app.clone()));
+    app.window.connect_destroy(|w| {
+        APPS.with(|a| a.borrow_mut().retain(|x| x.window != *w));
+    });
     if let Some((w, h)) = std::env::var("DOCVIEW_SIZE").ok().and_then(|s| {
         let (w, h) = s.split_once('x')?;
         Some((w.parse().ok()?, h.parse().ok()?))

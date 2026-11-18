@@ -630,6 +630,9 @@ impl DocView {
     }
 
     fn on_resize(&self, w: f64, h: f64) {
+        if crate::debug() {
+            eprintln!("resize {w}x{h}");
+        }
         let first = self.sr().view_w <= 0.0;
         let place = if first { None } else { self.place() };
         {
@@ -944,6 +947,9 @@ impl DocView {
 
     fn draw(&self, snap: &gtk::Snapshot) {
         let s = self.device_scale();
+        if crate::debug() {
+            eprintln!("draw scale={s} zoom={:.3} view={}x{}", self.sr().zoom, self.sr().view_w, self.sr().view_h);
+        }
         let (sx, sy) = self.scroll_pos();
         let mut jobs: Vec<Job> = Vec::new();
         let mut prefetch: Vec<Job> = Vec::new();

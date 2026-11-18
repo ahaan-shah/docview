@@ -1,13 +1,16 @@
 name: Release
 
-# Push a tag like v0.1.0 to build and publish a release.
+# Started by hand on a version tag (scripts/release.sh makes the tag):
+#   gh workflow run release.yml --ref v0.1.0
+# Linux only: x86-64 and ARM64 tarballs (for install.sh), .deb and .rpm packages.
 on:
-  push:
-    tags: ['v*']
   workflow_dispatch:
 
 permissions:
   contents: write
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   build:
@@ -21,25 +24,32 @@ jobs:
           # current Arch, Fedora, Debian 13 and Ubuntu 24.04+.
           - os: ubuntu-24.04
             arch: x86_64
+          # A native arm64 runner, so the system libraries need no cross sysroot.
           - os: ubuntu-24.04-arm
             arch: aarch64
     steps:
+      - name: Refuse anything but a version tag
+        run: |
+          case "$GITHUB_REF" in
+            refs/tags/v[0-9]*) ;;
+            *) echo "Run this on a version tag: gh workflow run release.yml --ref vX.Y.Z"; exit 1 ;;
+          esac
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - name: System libraries
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-4-dev libpoppler-glib-dev
-      - run: cargo test --release
-      - run: cargo build --release
-      - run: cargo install cargo-deb cargo-generate-rpm
+      # No compiler cache: published binaries never build from outputs restored from a cache.
+      - run: cargo test --release --locked
+      - run: cargo build --release --locked
+      - run: cargo install --locked cargo-deb cargo-generate-rpm
       - run: cargo deb --no-build
       - run: cargo generate-rpm
 
       - name: Package
         run: |
-          tag="${GITHUB_REF_NAME}"
-          name="docview-${tag}-${{ matrix.arch }}-linux"
+          name="docview-${GITHUB_REF_NAME}-${{ matrix.arch }}-linux"
           mkdir -p "out/$name"
           cp target/release/docview "out/$name/"
           cp packaging/docview.desktop README.md LICENSE "out/$name/"
@@ -58,20 +68,32 @@ jobs:
             out/*.rpm
           if-no-files-found: error
 
-  release:
+  publish:
+    name: GitHub release
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@v4
         with:
-          path: files
+          path: dist
           merge-multiple: true
-      - name: Checksums
-        run: cd files && sha256sum * > checksums.txt && cat checksums.txt
-      - name: Publish
-        env:
-          GH_TOKEN: ${{ github.token }}
+      # The source package, so source builds can check it against the same checksums.
+      - name: Source archive
         run: |
-          tag="${GITHUB_REF_NAME}"
-          gh release create "$tag" files/* --repo "$GITHUB_REPOSITORY" \
-            --title "docview ${tag}" --generate-notes
+          curl --fail --location --retry 3 \
+            "https://github.com/${GITHUB_REPOSITORY}/archive/refs/tags/${GITHUB_REF_NAME}.tar.gz" \
+            --output "dist/docview-${GITHUB_REF_NAME}-source.tar.gz"
+      - name: Checksums
+        run: cd dist && sha256sum * > checksums.txt && cat checksums.txt
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          name: docview ${{ github.ref_name }}
+          body_path: packaging/release-notes/${{ github.ref_name }}.md
+          generate_release_notes: false
+          # A tag with a suffix (v0.2.0-rc1) is a pre-release: it stays off "latest",
+          # so install.sh never picks it.
+          prerelease: ${{ contains(github.ref_name, '-') }}

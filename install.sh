@@ -107,4 +107,6 @@ esac
 libs="$({ ldconfig -p 2>/dev/null || /sbin/ldconfig -p 2>/dev/null || true; })"
 echo "$libs" | grep -q 'libgtk-4\.so\.1' && echo "$libs" | grep -q 'libpoppler-glib\.so\.8' ||
     say "note: docview needs GTK 4 and poppler-glib (Arch: gtk4 poppler-glib, Debian/Ubuntu: libgtk-4-1 libpoppler-glib8, Fedora: gtk4 poppler-glib)"
+echo "$libs" | grep -q 'libwebkitgtk-6\.0\.so\.4' ||
+    say "optional: to open HTML files, install WebKitGTK 6 (Arch: webkitgtk-6.0, Debian/Ubuntu: libwebkitgtk-6.0-4, Fedora: webkitgtk6.0)"
 say "run it with: docview [file]"

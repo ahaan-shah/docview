@@ -131,7 +131,13 @@ First tile ~215 ms after launch. Idle CPU 0. Binary 1.4 MB.
 ## Git and releases
 
 Public repository `ahaan-shah/docview`, branch `main`. Commit after each working change.
-Releasing: bump the version in `Cargo.toml` and `packaging/PKGBUILD`, commit, push a tag `vX.Y.Z`.
+Releasing (same flow as ../spotsie, Linux only):
+1. Write `packaging/release-notes/vX.Y.Z.md` (summary, then New / Changed / Fixed / Removed,
+   each item leading with a bold user-facing result).
+2. With everything else committed, `scripts/release.sh X.Y.Z` sets the version in Cargo.toml,
+   Cargo.lock and the PKGBUILD, commits and makes the annotated tag. It does not push.
+3. Push only when the user asks: `git push && git push origin vX.Y.Z`, then
+   `gh workflow run release.yml --ref vX.Y.Z`.
 `.github/workflows/release.yml` builds on Ubuntu 24.04 (x86-64 + ARM64; GTK 4.14 is the floor,
-so gtk4-rs features stay at `v4_12`) and publishes tarballs, `.deb`, `.rpm` and `checksums.txt`.
-The root `install.sh` downloads that tarball.
+so gtk4-rs features stay at `v4_12`) and publishes tarballs, `.deb`, `.rpm`, the source archive
+and `checksums.txt`, with the notes file as the release body. The root `install.sh` downloads that tarball.

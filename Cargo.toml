@@ -50,4 +50,4 @@ assets = [
 gtk4 = ">= 4.12"
 poppler-glib = "*"
 [package.metadata.generate-rpm.recommends]
-webkitgtk6.0 = "*"
+"webkitgtk6.0" = "*"

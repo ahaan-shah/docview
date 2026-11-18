@@ -26,17 +26,20 @@ scripts/install.sh [--default]              # per-user install into ~/.local
 
 ## Do not disturb the desktop
 
-The user works on this machine while sessions run. Never open the app on their workspace.
-- `scripts/shot.sh` runs the app with `GDK_BACKEND=x11` inside a rootful `Xwayland :93` parked
-  on Hyprland workspace 9 (`hl.exec_cmd(cmd, { workspace = "9 silent" })`, Lua API).
-  A Wayland window on a hidden workspace gets **no frame callbacks**, so GTK never revalidates
-  CSS or lays out after the first frame: screenshots taken that way show stale styles. Broadway
-  (`gtk4-broadwayd`) has the same problem. Xwayland's X11 frame clock ticks on a timer.
-- The Xwayland root is the size of the workspace-9 tile (~1426x761), so windows are clamped to it.
+The user works on this machine while sessions run. Never open the app on their workspace, and
+do not create outputs, nested compositors or extra X servers (it disrupts their session).
+- `scripts/shot.sh` launches the app natively with `hl.exec_cmd(cmd, { workspace = "9 silent" })`
+  (Lua API). A window on a hidden workspace gets **no frame callbacks**: GTK never re-lays out or
+  restyles it after mapping. The `DOCVIEW_SNAPSHOT` hook therefore allocates the window content
+  itself at `DOCVIEW_SIZE` and renders offscreen. Consequences: CSS state changes made after
+  startup (`.active` buttons) can look stale in shots, and real input cannot be tested there.
+- Snapshots force their own layout, so they **cannot** catch bugs where GTK's frame clock stops.
+  `DOCVIEW_DEBUG=1` with `DOCVIEW_RUN` prints the window size vs. its minimum size: keep the
+  minimum well below any tile size (see below).
 - shot.sh points `XDG_CONFIG_HOME` / `XDG_STATE_HOME` at a temp dir; never let tests write the
   user's real `~/.config/docview` or `~/.local/state/docview`.
-- `pkill -f <pattern>` can match the shell running it (the pattern is in its own command line)
-  and kill the tool call. Use `pgrep -f "^Xwayland :93"` style anchored patterns.
+- `pkill -f <pattern>` can match the shell running it and kill the tool call. Use anchored
+  patterns or `pkill -x docview`.
 - Use only `tests/fixtures/sample.pdf` (generated) for committed screenshots, never the user's PDFs.
 - Kill leftovers when done (`pkill -x docview`) and check `hyprctl activeworkspace`.
 
@@ -65,6 +68,13 @@ examples/make_sample.rs   generates the test / screenshot PDF
 ```
 
 ## Things that are easy to get wrong
+
+- **The window's minimum size must stay small.** Hyprland tiles windows; if the content's minimum
+  size is bigger than the tile, GTK asks for a resize that never comes and stops drawing and
+  handling input (the app looks frozen and pages stay as blurry previews). The top bar sits in a
+  `ScrolledWindow` (External policy) and `App::responsive` hides groups that do not fit; the
+  empty state is scrollable; labels ellipsize. Never set widget state from `size_allocate` or
+  `snapshot`: `DocView` queues `Change::View` to an idle.
 
 - Coordinates: `pdf::Rect` and `DocPoint` are **unrotated page points, top-left origin**. poppler's
   link / annot / find rects are bottom-left (flipped in pdf.rs); selection APIs are top-left.

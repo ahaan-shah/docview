@@ -31,6 +31,9 @@ const RIGHT: &[(&str, &[&str])] = &[
 pub struct App {
     pub window: gtk::ApplicationWindow,
     topbar: gtk::WindowHandle,
+    bar: gtk::Box,
+    bar_clip: gtk::ScrolledWindow,
+    responsive_pending: Cell<bool>,
     statusbar: gtk::Box,
     view: DocView,
     stack: gtk::Stack,
@@ -116,6 +119,7 @@ impl App {
         filename.set_ellipsize(gtk::pango::EllipsizeMode::End);
         filename.set_xalign(0.0);
         filename.set_hexpand(true);
+        filename.set_max_width_chars(1);
         filename.set_margin_start(4);
         bar.append(&filename);
 
@@ -155,8 +159,15 @@ impl App {
             bar.append(&g);
             groups.push((*group, g));
         }
+        // The bar never sets the window's minimum width: a window that asks for more than a
+        // tiling compositor gives it waits for a resize that never comes, and GTK stops
+        // drawing. Groups that do not fit are hidden instead (`responsive`).
+        let bar_clip = gtk::ScrolledWindow::new();
+        bar_clip.set_policy(gtk::PolicyType::External, gtk::PolicyType::Never);
+        bar_clip.set_propagate_natural_height(true);
+        bar_clip.set_child(Some(&bar));
         let handle = gtk::WindowHandle::new();
-        handle.set_child(Some(&bar));
+        handle.set_child(Some(&bar_clip));
 
         // ---- document area
         let view = DocView::new();
@@ -169,9 +180,14 @@ impl App {
         empty.set_halign(gtk::Align::Center);
         empty.set_valign(gtk::Align::Center);
         let stack = gtk::Stack::new();
-        stack.add_named(&empty, Some("empty"));
+        // Scrollable, so a long recent-files list never sets the window's minimum size.
+        let empty_scroll = gtk::ScrolledWindow::new();
+        empty_scroll.set_child(Some(&empty));
+        stack.add_named(&empty_scroll, Some("empty"));
         stack.add_named(&scroller, Some("doc"));
         stack.set_vexpand(true);
+        stack.set_hhomogeneous(false);
+        stack.set_vhomogeneous(false);
 
         // ---- find bar
         let fb = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -205,6 +221,8 @@ impl App {
         let findbar = gtk::Revealer::new();
         findbar.set_child(Some(&fb));
         findbar.set_transition_type(gtk::RevealerTransitionType::None);
+        // Hidden, not just unrevealed: an unrevealed Revealer without a transition keeps its height.
+        findbar.set_visible(false);
 
         // ---- status bar
         let status = gtk::Box::new(gtk::Orientation::Horizontal, 0);
@@ -238,6 +256,9 @@ impl App {
         let app = Rc::new(App {
             window,
             topbar: handle,
+            bar,
+            bar_clip,
+            responsive_pending: Cell::new(false),
             statusbar: status,
             view,
             stack,
@@ -261,7 +282,7 @@ impl App {
             config: RefCell::new(config),
             state: RefCell::new(state::load()),
             keymap: RefCell::new(keymap),
-            palette: RefCell::new(Palette::from_theme(&theme::current(Default::default(), &Default::default()))),
+            palette: RefCell::new(Palette::from_theme(&theme::current("system", Default::default(), &Default::default()))),
             portal: &PORTAL,
             monitors: RefCell::new(Vec::new()),
             reload_timer: RefCell::new(None),
@@ -276,6 +297,7 @@ impl App {
         app.apply_view_config();
         app.refresh_tooltips();
         app.build_empty();
+        app.apply_bars();
         app.refresh();
         app
     }
@@ -421,29 +443,65 @@ impl App {
                 glib::Propagation::Proceed
             });
         }
-        // Narrow windows drop button groups, like allwrite's media queries.
+        // Narrow windows drop button groups, like allwrite's media queries. The bar's
+        // viewport width changes on every resize; act on it after layout, never during.
         {
             let w = Rc::downgrade(self);
-            self.window.connect_default_width_notify(move |_| {
+            self.bar_clip.hadjustment().connect_changed(move |_| {
                 if let Some(a) = w.upgrade() {
-                    a.responsive();
+                    a.queue_responsive();
                 }
             });
         }
     }
 
-    fn responsive(&self) {
-        let w = self.window.width().max(self.window.default_width());
-        for (name, g) in &self.groups {
-            let show = match *name {
-                "view" => w > 760,
-                "tools" => w > 560,
-                "zoom" => w > 440,
-                _ => true,
-            };
-            g.set_visible(show);
+    fn queue_responsive(self: &Rc<Self>) {
+        if self.responsive_pending.replace(true) {
+            return;
         }
-        self.pagebox.set_visible(w > 360);
+        let w = Rc::downgrade(self);
+        glib::idle_add_local_once(move || {
+            if let Some(a) = w.upgrade() {
+                a.responsive_pending.set(false);
+                a.responsive();
+            }
+        });
+    }
+
+    /// Show as many button groups as fit, dropping the least needed first.
+    fn responsive(&self) {
+        let avail = self.bar_clip.width();
+        if avail <= 0 {
+            return;
+        }
+        let order: [&dyn Fn(bool); 5] = [
+            &|v| self.group("view").set_visible(v),
+            &|v| self.group("tools").set_visible(v),
+            &|v| self.group("zoom").set_visible(v),
+            &|v| self.pagebox.set_visible(v),
+            &|v| self.buttons["forward"].set_visible(v),
+        ];
+        for f in &order {
+            f(true);
+        }
+        for f in &order {
+            // The filename is ellipsized; leave it room for a few characters.
+            if self.bar.measure(gtk::Orientation::Horizontal, -1).1 + 60 <= avail {
+                break;
+            }
+            f(false);
+        }
+    }
+
+    fn group(&self, name: &str) -> &gtk::Box {
+        &self.groups.iter().find(|(n, _)| *n == name).expect("group").1
+    }
+
+    /// Top bar and status bar visibility from focus mode and the `topbar` setting.
+    fn apply_bars(&self) {
+        let focus = self.focus_mode.get();
+        self.topbar.set_visible(!focus && self.config.borrow().app.topbar);
+        self.statusbar.set_visible(!focus);
     }
 
     fn on_key(self: &Rc<Self>, c: &gtk::EventControllerKey, kv: gdk::Key, code: u32, state: gdk::ModifierType) -> glib::Propagation {
@@ -498,7 +556,10 @@ impl App {
     // ---------------------------------------------------------------- theme
 
     fn apply_theme(&self) {
-        let theme = theme::current(*self.portal.lock().unwrap(), &self.config.borrow().theme);
+        let theme = {
+            let c = self.config.borrow();
+            theme::current(&c.app.mode, *self.portal.lock().unwrap(), &c.theme)
+        };
         let pal = Palette::from_theme(&theme);
         self.css.load_from_string(&pal.css(&self.config.borrow().app.font));
         self.palette.replace(pal);
@@ -582,6 +643,29 @@ impl App {
     }
 
     /// Top-bar buttons that show as active, for the dev hooks.
+    /// Window size vs. the minimum its content asks for (a minimum larger than the tile the
+    /// compositor gives the window stalls drawing), for DOCVIEW_DEBUG.
+    pub fn debug_sizes(&self) -> String {
+        let (mw, _) = (self.window.measure(gtk::Orientation::Horizontal, -1).0, ());
+        let mh = self.window.measure(gtk::Orientation::Vertical, -1).0;
+        let bar = self.bar.measure(gtk::Orientation::Horizontal, -1);
+        let hidden: Vec<&str> = self.groups.iter().filter(|(_, g)| !g.is_visible()).map(|(n, _)| *n).collect();
+        format!(
+            "window {}x{} min {mw}x{mh}; bar min/nat {}/{} in {}; hidden groups {hidden:?}",
+            self.window.width(),
+            self.window.height(),
+            bar.0,
+            bar.1,
+            self.bar_clip.width()
+        ) + &format!(
+            "; heights: top {} stack {} find {} status {}",
+            self.topbar.height(),
+            self.stack.height(),
+            self.findbar.height(),
+            self.statusbar.height()
+        )
+    }
+
     pub fn active_buttons(&self) -> Vec<&'static str> {
         let mut v: Vec<&'static str> = self.buttons.iter().filter(|(_, b)| b.has_css_class("active")).map(|(id, _)| *id).collect();
         v.sort();
@@ -770,7 +854,6 @@ impl App {
     }
 
     fn refresh(&self) {
-        self.responsive();
         let doc = self.view.doc();
         let has = doc.is_some();
         match &doc {
@@ -909,6 +992,8 @@ impl App {
         let key = km.first_key(commands::get("open").unwrap()).unwrap_or_default();
         let hint = gtk::Label::new(Some(&format!("Open a PDF with {key}, or drop one here")));
         hint.add_css_class("hint");
+        hint.set_wrap(true);
+        hint.set_justify(gtk::Justification::Center);
         hint.set_margin_bottom(14);
         self.empty.append(&title);
         self.empty.append(&hint);
@@ -919,6 +1004,8 @@ impl App {
             let name = gtk::Label::new(Some(&p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default()));
             name.set_xalign(0.0);
             name.set_hexpand(true);
+            name.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            name.set_max_width_chars(40);
             let dir = gtk::Label::new(Some(&p.parent().map(home_short).unwrap_or_default()));
             dir.add_css_class("path");
             dir.set_ellipsize(gtk::pango::EllipsizeMode::Start);
@@ -940,6 +1027,7 @@ impl App {
 
     fn open_find(&self) {
         self.findbar.set_reveal_child(true);
+        self.findbar.set_visible(true);
         if self.view.has_selection() {
             let t = self.view.selected_text();
             if !t.is_empty() && t.len() < 200 && !t.contains('\n') {
@@ -953,6 +1041,7 @@ impl App {
 
     fn close_find(&self) {
         self.findbar.set_reveal_child(false);
+        self.findbar.set_visible(false);
         self.view.clear_find();
         self.view.grab_focus();
         self.refresh();
@@ -1040,9 +1129,29 @@ impl App {
             "focus" => {
                 let on = !self.focus_mode.get();
                 self.focus_mode.set(on);
-                self.topbar.set_visible(!on);
-                self.statusbar.set_visible(!on);
-                self.refresh();
+                self.apply_bars();
+            }
+            "topbar" => {
+                if self.focus_mode.get() {
+                    self.focus_mode.set(false);
+                    self.config.borrow_mut().app.topbar = true;
+                } else {
+                    let on = !self.config.borrow().app.topbar;
+                    self.config.borrow_mut().app.topbar = on;
+                }
+                self.save_config();
+                self.apply_bars();
+            }
+            "theme-mode" => {
+                let next = match self.config.borrow().app.mode.as_str() {
+                    "system" => "light",
+                    "light" => "dark",
+                    _ => "system",
+                };
+                self.config.borrow_mut().app.mode = next.into();
+                self.save_config();
+                self.apply_theme();
+                self.toast.show(&format!("Color mode: {next}"));
             }
             "fullscreen" => {
                 if self.window.is_fullscreen() { self.window.unfullscreen() } else { self.window.fullscreen() }
@@ -1436,9 +1545,36 @@ impl App {
             a.config.borrow_mut().view.night = v;
             a.apply_view_colors();
         })));
+        panel.append(&switch_row("Show the top bar", c.app.topbar, Box::new(|a, v| {
+            a.config.borrow_mut().app.topbar = v;
+            a.apply_bars();
+        })));
         panel.append(&switch_row("Reopen where I left off", c.app.restore_position, Box::new(|a, v| {
             a.config.borrow_mut().app.restore_position = v;
         })));
+        // Color mode
+        let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+        row.add_css_class("setting");
+        let l = gtk::Label::new(Some("Colors"));
+        l.set_xalign(0.0);
+        l.set_hexpand(true);
+        let modes = ["system", "light", "dark"];
+        let dd = gtk::DropDown::from_strings(&["System (pywal)", "Light", "Dark"]);
+        dd.set_selected(modes.iter().position(|m| *m == c.app.mode).unwrap_or(0) as u32);
+        dd.set_valign(gtk::Align::Center);
+        {
+            let w = Rc::downgrade(self);
+            dd.connect_selected_notify(move |d| {
+                if let Some(a) = w.upgrade() {
+                    a.config.borrow_mut().app.mode = modes[d.selected().min(2) as usize].into();
+                    a.save_config();
+                    a.apply_theme();
+                }
+            });
+        }
+        row.append(&l);
+        row.append(&dd);
+        panel.append(&row);
         // Default fit
         let row = gtk::Box::new(gtk::Orientation::Horizontal, 16);
         row.add_css_class("setting");
@@ -1485,7 +1621,7 @@ impl App {
         row.append(&b);
         panel.append(&row);
         let note = gtk::Label::new(Some(&format!(
-            "Colors follow your pywal palette. More options (keys, theme slots, UI font, cache size) in {}",
+            "System colors follow pywal, or your desktop's light / dark setting. More options (keys, theme slots, UI font, cache size) in {}",
             config::path().map(|p| home_short(&p)).unwrap_or_default()
         )));
         note.add_css_class("settings-note");

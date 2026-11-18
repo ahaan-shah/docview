@@ -36,11 +36,15 @@ pub struct AppCfg {
     pub font: String,
     /// Upper bound for rendered page tiles kept in memory, in MB.
     pub cache_mb: u32,
+    /// Color mode: "system" (pywal, else the desktop's light/dark setting), "light" or "dark".
+    pub mode: String,
+    /// Show the top bar.
+    pub topbar: bool,
 }
 
 impl Default for AppCfg {
     fn default() -> Self {
-        Self { restore_position: true, highlight: "color3".into(), font: "Inter".into(), cache_mb: 48 }
+        Self { restore_position: true, highlight: "color3".into(), font: "Inter".into(), cache_mb: 48, mode: "system".into(), topbar: true }
     }
 }
 

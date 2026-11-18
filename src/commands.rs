@@ -66,7 +66,9 @@ pub const COMMANDS: &[Command] = &[
     c("rotate-right", "Rotate clockwise", &["Ctrl+Right", "R"], None, "View"),
     c("rotate-left", "Rotate counterclockwise", &["Ctrl+Left", "Shift+R"], None, "View"),
     c("presentation", "Presentation mode", &["F5"], None, "View"),
-    c("focus", "Toggle focus mode", &["Ctrl+Shift+F"], Some("focus"), "View"),
+    c("topbar", "Toggle top bar", &["Ctrl+B"], None, "View"),
+    c("focus", "Toggle focus mode (hide both bars)", &["Ctrl+Shift+F"], Some("focus"), "View"),
+    c("theme-mode", "Switch color mode (system, light, dark)", &["Ctrl+Shift+T"], None, "View"),
     c("fullscreen", "Toggle fullscreen", &["F11"], None, "View"),
     // Text
     c("find", "Find", &["Ctrl+F", "/"], Some("search"), "Text"),
@@ -84,7 +86,7 @@ pub const COMMANDS: &[Command] = &[
     // App
     h("palette", "Command palette", &["Ctrl+P", "Ctrl+Shift+A"], "App"),
     c("settings", "Settings", &["Ctrl+,"], Some("settings"), "App"),
-    c("shortcuts", "Keyboard shortcuts", &["Ctrl+/", "Shift+/", "F1"], None, "App"),
+    c("shortcuts", "Keyboard shortcuts", &["Ctrl+K", "Ctrl+/", "Shift+/", "F1"], None, "App"),
 ];
 
 pub fn get(id: &str) -> Option<&'static Command> {

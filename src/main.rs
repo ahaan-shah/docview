@@ -123,6 +123,7 @@ fn dev_hooks(app: &Rc<app::App>) {
             }
             if std::env::var_os("DOCVIEW_DEBUG").is_some() {
                 eprintln!("active buttons: {:?}", a.active_buttons());
+                eprintln!("{}", a.debug_sizes());
             }
         });
     }
@@ -156,7 +157,14 @@ fn focused_entry(a: &Rc<app::App>) -> Option<gtk::Entry> {
 }
 
 fn capture(a: &Rc<app::App>) -> Option<gtk::gdk::Texture> {
-    let (w, h) = (a.window.width(), a.window.height());
+    // DOCVIEW_SIZE overrides the window size (a tiled window ignores its default size).
+    let (w, h) = std::env::var("DOCVIEW_SIZE")
+        .ok()
+        .and_then(|s| {
+            let (w, h) = s.split_once('x')?;
+            Some((w.parse().ok()?, h.parse().ok()?))
+        })
+        .unwrap_or((a.window.width(), a.window.height()));
     let child = a.window.child()?;
     child.allocate(w, h, -1, None);
     let snap = gtk::Snapshot::new();

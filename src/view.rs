@@ -221,6 +221,9 @@ mod imp {
         pub find_gen: Arc<AtomicU64>,
         pub adj_handlers: RefCell<Vec<(gtk::Adjustment, glib::SignalHandlerId)>>,
         pub trim_timer: RefCell<Option<glib::SourceId>>,
+        /// A `Change::View` is queued for the next idle (coalesced, and never sent from
+        /// inside layout or drawing, where changing other widgets stalls GTK's frame clock).
+        pub view_pending: Cell<bool>,
     }
 
     impl Default for DocView {
@@ -236,6 +239,7 @@ mod imp {
                 find_gen: Arc::new(AtomicU64::new(0)),
                 adj_handlers: RefCell::new(Vec::new()),
                 trim_timer: RefCell::new(None),
+                view_pending: Cell::new(false),
             }
         }
     }
@@ -348,6 +352,22 @@ impl DocView {
     }
 
     fn emit(&self, c: Change) {
+        if matches!(c, Change::View) {
+            if !self.imp().view_pending.replace(true) {
+                let weak = self.downgrade();
+                glib::idle_add_local_once(move || {
+                    if let Some(v) = weak.upgrade() {
+                        v.imp().view_pending.set(false);
+                        v.emit_now(Change::View);
+                    }
+                });
+            }
+            return;
+        }
+        self.emit_now(c);
+    }
+
+    fn emit_now(&self, c: Change) {
         let l = self.imp().listener.borrow().clone();
         if let Some(l) = l {
             l(c);

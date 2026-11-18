@@ -129,7 +129,14 @@ pub fn builtin(portal: PortalState, source: &'static str, map: &BTreeMap<String,
         .into_theme(source, map)
 }
 
-pub fn current(portal: PortalState, map: &BTreeMap<String, String>) -> Theme {
+/// `mode`: "light" / "dark" force the built-in palette; anything else ("system") follows pywal,
+/// then the desktop portal.
+pub fn current(mode: &str, portal: PortalState, map: &BTreeMap<String, String>) -> Theme {
+    match mode {
+        "light" => return builtin(PortalState { scheme: Some(2), ..portal }, "light", map),
+        "dark" => return builtin(PortalState { scheme: Some(1), ..portal }, "dark", map),
+        _ => {}
+    }
     if let Some(t) = wal_file()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .and_then(|j| parse_pywal(&j, map))

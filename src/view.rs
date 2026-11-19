@@ -84,6 +84,8 @@ enum Edit {
 
 struct Tile {
     tex: gdk::Texture,
+    w: i32,
+    h: i32,
     bytes: usize,
     used: u64,
     generation: u64,
@@ -1027,15 +1029,18 @@ impl DocView {
                 let y = snap_px(b.y - sy);
                 let rect = graphene::Rect::new(x as f32, y as f32, b.w as f32, b.h as f32);
                 let border = graphene::Rect::new(x as f32 - 1.0, y as f32 - 1.0, b.w as f32 + 2.0, b.h as f32 + 2.0);
-                snap.append_color(&colors.border, &border);
-                snap.append_color(&page_bg, &rect);
-                if let Some(t) = st.tiles.get_mut(&pkey) {
-                    t.used = frame;
-                    snap.append_scaled_texture(&t.tex, gsk::ScalingFilter::Linear, &rect);
-                }
-                // Tiles from another zoom level stand in until the new ones arrive.
-                let have_all = (ty0..=ty1).all(|ty| (tx0..=tx1).all(|tx| st.tiles.contains_key(&TileKey { page, scale: rq, tx, ty })));
+                let bc = colors.border;
+                snap.append_border(&gsk::RoundedRect::from_rect(border, 0.0), &[1.0; 4], &[bc, bc, bc, bc]);
+                let fresh = |t: &Tile| !stale(t);
+                let have_all = (ty0..=ty1).all(|ty| (tx0..=tx1).all(|tx| st.tiles.get(&TileKey { page, scale: rq, tx, ty }).is_some_and(fresh)));
+                // What goes on the page, back to front: background and preview (only while
+                // tiles are missing), tiles of another zoom level, then the tiles.
+                let mut draws: Vec<(TileKey, graphene::Rect)> = Vec::new();
                 if !have_all {
+                    snap.append_color(&page_bg, &rect);
+                    if st.tiles.contains_key(&pkey) {
+                        draws.push((pkey, rect));
+                    }
                     let mut scales: HashMap<u32, usize> = HashMap::new();
                     for k in st.tiles.keys() {
                         if k.page == page && k.scale != 0 && k.scale != rq {
@@ -1045,36 +1050,40 @@ impl DocView {
                     // Prefer the closest scale.
                     if let Some((&fs, _)) = scales.iter().min_by_key(|(sc, _)| (**sc as i64 - rq as i64).abs()) {
                         let frs = fs as f64 / 1000.0;
-                        let keys: Vec<TileKey> = st.tiles.keys().filter(|k| k.page == page && k.scale == fs).copied().collect();
-                        for k in keys {
-                            let t = st.tiles.get_mut(&k).unwrap();
-                            t.used = frame;
-                            let tw = t.tex.width() as f64 / frs * ppp;
-                            let th = t.tex.height() as f64 / frs * ppp;
+                        for (k, t) in st.tiles.iter().filter(|(k, _)| k.page == page && k.scale == fs) {
                             let r = graphene::Rect::new(
                                 (x + (k.tx * TILE) as f64 / frs * ppp) as f32,
                                 (y + (k.ty * TILE) as f64 / frs * ppp) as f32,
-                                tw as f32,
-                                th as f32,
+                                (t.w as f64 / frs * ppp) as f32,
+                                (t.h as f64 / frs * ppp) as f32,
                             );
-                            snap.append_scaled_texture(&t.tex, gsk::ScalingFilter::Linear, &r);
+                            draws.push((*k, r));
                         }
                     }
                 }
                 for ty in ty0..=ty1 {
                     for tx in tx0..=tx1 {
-                        if let Some(t) = st.tiles.get_mut(&TileKey { page, scale: rq, tx, ty }) {
-                            t.used = frame;
+                        let k = TileKey { page, scale: rq, tx, ty };
+                        if let Some(t) = st.tiles.get(&k) {
                             let r = graphene::Rect::new(
                                 (x + (tx * TILE) as f64 / s) as f32,
                                 (y + (ty * TILE) as f64 / s) as f32,
-                                (t.tex.width() as f64 / s) as f32,
-                                (t.tex.height() as f64 / s) as f32,
+                                (t.w as f64 / s) as f32,
+                                (t.h as f64 / s) as f32,
                             );
-                            // A plain texture node: the cairo renderer draws a scaled-texture node through an
-                            // intermediate surface at 1x, which blurs tiles on HiDPI screens.
-                            snap.append_texture(&t.tex, &r);
+                            draws.push((k, r));
                         }
+                    }
+                }
+                for (k, r) in &draws {
+                    let t = st.tiles.get_mut(k).unwrap();
+                    t.used = frame;
+                    if k.scale == rq {
+                        // A plain texture node: the cairo renderer draws a scaled-texture node through an
+                        // intermediate surface at 1x, which blurs tiles on HiDPI screens.
+                        snap.append_texture(&t.tex, r);
+                    } else {
+                        snap.append_scaled_texture(&t.tex, gsk::ScalingFilter::Linear, r);
                     }
                 }
 
@@ -1165,11 +1174,12 @@ impl DocView {
                 eprintln!("tile {:?} {}x{}", r.key, r.w, r.h);
             }
             let bytes = r.data.len();
+            let (w, h) = (r.w, r.h);
             let gbytes = glib::Bytes::from_owned(r.data);
-            let tex = gdk::MemoryTexture::new(r.w, r.h, gdk::MemoryFormat::B8g8r8a8Premultiplied, &gbytes, r.w as usize * 4);
+            let tex = gdk::MemoryTexture::new(w, h, gdk::MemoryFormat::B8g8r8a8Premultiplied, &gbytes, w as usize * 4).upcast();
             let frame = st.frame;
             let generation = st.generation;
-            if let Some(old) = st.tiles.insert(r.key, Tile { tex: tex.upcast(), bytes, used: frame, generation }) {
+            if let Some(old) = st.tiles.insert(r.key, Tile { tex, w, h, bytes, used: frame, generation }) {
                 st.tile_bytes -= old.bytes;
             }
             st.tile_bytes += bytes;

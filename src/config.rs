@@ -40,11 +40,14 @@ pub struct AppCfg {
     pub mode: String,
     /// Show the top bar.
     pub topbar: bool,
+    /// Draw with the GPU (Vulkan): smooth scrolling on HiDPI / high refresh screens, but
+    /// ~60-80 MB of graphics memory. false = software rendering (read at startup).
+    pub gpu: bool,
 }
 
 impl Default for AppCfg {
     fn default() -> Self {
-        Self { restore_position: true, highlight: "color3".into(), font: "Inter".into(), cache_mb: 48, mode: "system".into(), topbar: true }
+        Self { restore_position: true, highlight: "color3".into(), font: "Inter".into(), cache_mb: 48, mode: "system".into(), topbar: true, gpu: true }
     }
 }
 

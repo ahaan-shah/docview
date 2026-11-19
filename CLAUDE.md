@@ -57,7 +57,7 @@ lays out, draws, and saves a PNG; `DOCVIEW_SIZE=WxH`; `DOCVIEW_DEBUG=1` prints t
 
 ```
 src/
-  main.rs      entry, lean env (cairo renderer, no GL/Vulkan, mallopt arenas), dev hooks
+  main.rs      entry, lean env (Vulkan on the iGPU, no GL / NVIDIA / lavapipe; mallopt arenas), dev hooks
   app.rs       window, top bar, status bar, find bar, empty state, App::run, pickers, settings
   view.rs      DocView: GtkScrollable widget. Layout, tile drawing, selection, links, search,
                highlights (+ undo), history, rotation. Emits `Change` to the app.
@@ -117,7 +117,16 @@ examples/make_sample.rs   generates the test / screenshot PDF
   change) are dropped. Pages touched by an annotation edit keep their old tiles on screen
   (marked stale through `page_gen`) until fresh ones arrive.
 - Tiles are `B8g8r8a8Premultiplied` (cairo ARGB32, painted opaque). Any other format makes the
-  cairo GSK renderer convert on every frame (that cost ~20 extra threads and lots of RAM).
+  cairo GSK renderer (the `gpu = false` fallback) convert on every frame (that cost ~20 extra
+  threads and lots of RAM). Background and preview are only painted under pages whose tiles
+  are not all there yet.
+- **Renderer.** Default is GSK's Vulkan renderer (`app.gpu`, read in `lean_env` before GTK
+  starts). The cairo renderer copies every texture into a new surface each frame (GTK 4.24
+  `gsk_texture_node_draw`), ~10-20 ms a frame at 2880x1620: scrolling stuttered on the 120 Hz
+  screen. A cairo node does not help (cairo clones its recording surface). GL loads mesa's
+  LLVM (+90 MB PSS). Vulkan's cost is graphics memory PSS does not show (4-image swapchain,
+  GPU copies of tiles): read `drm-total-system0` in `/proc/PID/fdinfo/*`. `bench:N` in
+  `DOCVIEW_RUN` times offscreen frames (thread CPU; GPU numbers include a readback).
 - `MALLOC_ARENA_MAX` in the env is read before `main`; use `mallopt` (done in `lean_env`).
 - Edition 2024: `gen` is a reserved keyword.
 - Key combos: letters come from the layout's keyval, everything else from the unshifted keyval

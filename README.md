@@ -92,7 +92,7 @@ the XDG portal.
 - With a 1,300-page book open it uses about **60 MB** of memory, and stays around 100–120 MB while you scroll, zoom and search through it. Rendered tiles live in a cache capped at 48 MB (`cache_mb`).
 - First page on screen in about 0.2 seconds, even for large books.
 - No CPU while idle: there are no timers or polling. The file and your palette are watched with inotify.
-- Software rendering, so it never wakes a sleeping discrete GPU on hybrid laptops.
+- Smooth scrolling on HiDPI and high-refresh screens: pages are composited on the integrated GPU with Vulkan, never the NVIDIA GPU, so a sleeping discrete GPU on a hybrid laptop stays asleep. That takes some graphics memory (~60–80 MB); `gpu = false` switches to software rendering. Without a Vulkan driver docview falls back to software by itself.
 
 **Live reload.** When the PDF changes on disk (say, LaTeX rebuilt it),
 docview reloads it and keeps your place.
@@ -225,6 +225,7 @@ font = "Inter"           # UI font
 cache_mb = 48            # memory for rendered pages
 mode = "system"          # "system" (pywal, else desktop light/dark), "light" or "dark"
 topbar = true
+gpu = true               # Vulkan; false = software rendering (less memory, choppier)
 
 [keys]                   # command id = key combo; several: "H, Ctrl+H"
 highlight = "Ctrl+H"

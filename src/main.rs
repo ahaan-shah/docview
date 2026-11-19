@@ -35,11 +35,24 @@ fn lean_env() {
                 set.push(k);
             }
         };
-        // Software rendering: the GL / Vulkan renderers pull in the GPU driver stack (tens of
-        // MB per process, and on hybrid laptops they wake the discrete GPU). Pages are
-        // pre-rendered tiles, so compositing them in software is cheap.
-        def("GSK_RENDERER", "cairo");
-        def("GDK_DISABLE", "gl,vulkan,dmabuf");
+        // Vulkan on the integrated GPU: compositing a HiDPI window in software (the cairo
+        // renderer) takes ~10-20 ms a frame, so scrolling stutters on a 120 Hz screen.
+        // Vulkan drivers are small (Intel's ~10 MB, no LLVM); GL would load mesa's LLVM and
+        // cost ~90 MB more. The NVIDIA driver stays out (huge, and it would wake a sleeping
+        // discrete GPU on hybrid laptops), so does lavapipe (software Vulkan, LLVM), and so do
+        // implicit layers (NVIDIA's Optimus layer loads its GL library). Without a usable
+        // driver GTK falls back to the cairo renderer. The cost is graphics memory, which PSS
+        // does not show (GTK's 4-image swapchain + GPU copies of tiles); `gpu = false` in
+        // the config trades smoothness for it.
+        if config::load().app.gpu {
+            def("GSK_RENDERER", "vulkan");
+            def("VK_LOADER_DRIVERS_DISABLE", "*nvidia*,*lvp*");
+            def("VK_LOADER_LAYERS_DISABLE", "~implicit~");
+            def("GDK_DISABLE", "gl,dmabuf");
+        } else {
+            def("GSK_RENDERER", "cairo");
+            def("GDK_DISABLE", "gl,vulkan,dmabuf");
+        }
         // No EGL vendor libraries: WebKit (web pages) would otherwise load the GPU drivers
         // and LLVM into this process (~55 MB) even with hardware acceleration off.
         def("__EGL_VENDOR_LIBRARY_FILENAMES", "/dev/null");
@@ -183,6 +196,26 @@ fn dev_hooks(app: &Rc<app::App>) {
                     }
                 } else if let Some(p) = c.strip_prefix("open:") {
                     a.open_path(std::path::Path::new(p), None);
+                } else if let Some(n) = c.strip_prefix("bench:") {
+                    // Frame cost: scroll a step and render the whole window offscreen, n times.
+                    let n: u32 = n.parse().unwrap_or(60);
+                    let _ = capture(&a);
+                    glib::timeout_future(std::time::Duration::from_millis(500)).await;
+                    let mut times = Vec::new();
+                    for _ in 0..n {
+                        a.run("scroll-down");
+                        glib::timeout_future(std::time::Duration::from_millis(120)).await;
+                        let t = thread_cpu_ms();
+                        let _ = capture(&a);
+                        times.push(thread_cpu_ms() - t);
+                    }
+                    times.sort_by(|x, y| x.total_cmp(y));
+                    eprintln!(
+                        "bench: {n} frames, median {:.1} ms, p90 {:.1} ms, max {:.1} ms",
+                        times[times.len() / 2],
+                        times[times.len() * 9 / 10],
+                        times[times.len() - 1]
+                    );
                 } else if c == "enter:" {
                     if let Some(e) = focused_entry(&a) {
                         e.emit_activate();
@@ -219,6 +252,12 @@ fn dev_hooks(app: &Rc<app::App>) {
             });
         });
     }
+}
+
+fn thread_cpu_ms() -> f64 {
+    let mut ts = libc::timespec { tv_sec: 0, tv_nsec: 0 };
+    unsafe { libc::clock_gettime(libc::CLOCK_THREAD_CPUTIME_ID, &mut ts) };
+    ts.tv_sec as f64 * 1000.0 + ts.tv_nsec as f64 / 1e6
 }
 
 fn focused_entry(a: &Rc<app::App>) -> Option<gtk::Entry> {

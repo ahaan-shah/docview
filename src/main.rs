@@ -24,6 +24,12 @@ pub const APP_ID: &str = "dev.docview.app";
 /// Variables `lean_env` set (not the user): removed again for programs docview launches.
 static LEAN_VARS: std::sync::OnceLock<Vec<&'static str>> = std::sync::OnceLock::new();
 
+/// Whether web pages may composite on the GPU (see `lean_env`). Unset (DOCVIEW_GPU): yes.
+pub static WEB_GPU: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// Mesa's EGL vendor file (glvnd), in the places distributions put it.
+const MESA_EGL: &[&str] = &["/usr/share/glvnd/egl_vendor.d/50_mesa.json", "/etc/glvnd/egl_vendor.d/50_mesa.json"];
+
 /// Environment for a small footprint. Set before GTK starts; `DOCVIEW_GPU=1` skips it.
 fn lean_env() {
     let mut set = Vec::new();
@@ -37,25 +43,42 @@ fn lean_env() {
         };
         // Vulkan on the integrated GPU: compositing a HiDPI window in software (the cairo
         // renderer) takes ~10-20 ms a frame, so scrolling stutters on a 120 Hz screen.
-        // Vulkan drivers are small (Intel's ~10 MB, no LLVM); GL would load mesa's LLVM and
+        // Vulkan drivers are small (Intel's ~10 MB, no LLVM); GSK's GL renderer would load LLVM and
         // cost ~90 MB more. The NVIDIA driver stays out (huge, and it would wake a sleeping
         // discrete GPU on hybrid laptops), so does lavapipe (software Vulkan, LLVM), and so do
         // implicit layers (NVIDIA's Optimus layer loads its GL library). Without a usable
         // driver GTK falls back to the cairo renderer. The cost is graphics memory, which PSS
         // does not show (GTK's 4-image swapchain + GPU copies of tiles); `gpu = false` in
         // the config trades smoothness for it.
+        let mut web_gpu = false;
         if config::load().app.gpu {
             def("GSK_RENDERER", "vulkan");
             def("VK_LOADER_DRIVERS_DISABLE", "*nvidia*,*lvp*");
             def("VK_LOADER_LAYERS_DISABLE", "~implicit~");
-            def("GDK_DISABLE", "gl,dmabuf");
+            // GL stays available for web pages: WebKit composites and scrolls on the GPU
+            // (its own scrolling thread) only when GTK has GL, otherwise it repaints the page
+            // on the CPU for every scroll step, which stutters. GTK sets GL up only when the
+            // first web view asks for it, so PDFs never load the GL driver. Only Mesa's EGL:
+            // NVIDIA's would load its huge driver and wake a sleeping discrete GPU. Costs
+            // ~25 MB here and ~25 MB in WebKit's web process while a page is open.
+            match MESA_EGL.iter().find(|p| std::path::Path::new(p).exists()) {
+                Some(p) => {
+                    def("__EGL_VENDOR_LIBRARY_FILENAMES", p);
+                    web_gpu = true;
+                }
+                None => {
+                    def("GDK_DISABLE", "gl");
+                    def("__EGL_VENDOR_LIBRARY_FILENAMES", "/dev/null");
+                }
+            }
         } else {
             def("GSK_RENDERER", "cairo");
             def("GDK_DISABLE", "gl,vulkan,dmabuf");
+            // No EGL vendor libraries: WebKit would otherwise load the GPU drivers and LLVM
+            // into this process (~55 MB) even with hardware acceleration off.
+            def("__EGL_VENDOR_LIBRARY_FILENAMES", "/dev/null");
         }
-        // No EGL vendor libraries: WebKit (web pages) would otherwise load the GPU drivers
-        // and LLVM into this process (~55 MB) even with hardware acceleration off.
-        def("__EGL_VENDOR_LIBRARY_FILENAMES", "/dev/null");
+        let _ = WEB_GPU.set(web_gpu);
         // No accessibility bus round-trips at startup when nothing listens.
         if std::env::var_os("DOCVIEW_A11Y").is_none() {
             def("GTK_A11Y", "none");

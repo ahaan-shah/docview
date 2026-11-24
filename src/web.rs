@@ -144,10 +144,73 @@ pub struct Web {
     print_op: RefCell<Option<glib::Object>>,
 }
 
+type ChooseConfig = unsafe extern "C" fn(P, *const i32, *mut P, i32, *mut i32) -> u32;
+static REAL_CHOOSE: OnceLock<usize> = OnceLock::new();
+
+const EGL_NONE: i32 = 0x3038;
+const EGL_RENDERABLE_TYPE: i32 = 0x3040;
+const EGL_OPENGL_ES2_BIT: i32 = 0x4;
+const EGL_OPENGL_BIT: i32 = 0x8;
+
+/// eglChooseConfig with a renderable type when the caller gave none. GTK (4.24) asks without
+/// one, so EGL assumes OpenGL ES 1, which Mesa (26.3) no longer offers: GTK then gets no
+/// configs, has no GL, and WebKit falls back to repainting the page on the CPU for every
+/// scroll step (it composites on the GPU only when GTK has GL).
+unsafe extern "C" fn choose_config(dpy: P, attrs: *const i32, configs: *mut P, size: i32, n: *mut i32) -> u32 {
+    let real: ChooseConfig = unsafe { std::mem::transmute(*REAL_CHOOSE.get().unwrap()) };
+    let mut list = Vec::new();
+    let mut has_type = false;
+    if !attrs.is_null() {
+        let mut i = 0;
+        loop {
+            let k = unsafe { *attrs.add(i) };
+            if k == EGL_NONE {
+                break;
+            }
+            has_type |= k == EGL_RENDERABLE_TYPE;
+            list.push(k);
+            list.push(unsafe { *attrs.add(i + 1) });
+            i += 2;
+        }
+    }
+    if !has_type {
+        for bits in [EGL_OPENGL_BIT | EGL_OPENGL_ES2_BIT, EGL_OPENGL_ES2_BIT] {
+            let mut l = list.clone();
+            l.extend([EGL_RENDERABLE_TYPE, bits, EGL_NONE]);
+            let mut count = 0;
+            if unsafe { real(dpy, l.as_ptr(), std::ptr::null_mut(), 0, &mut count) } != 0 && count > 0 {
+                return unsafe { real(dpy, l.as_ptr(), configs, size, n) };
+            }
+        }
+    }
+    unsafe { real(dpy, attrs, configs, size, n) }
+}
+
+/// Route GTK's eglChooseConfig (through libepoxy's dispatch pointer) to `choose_config`.
+/// Must run before GTK initializes GL, i.e. before the first web view.
+fn fix_egl_configs() {
+    static DONE: OnceLock<()> = OnceLock::new();
+    DONE.get_or_init(|| unsafe {
+        let epoxy = libc::dlopen(c"libepoxy.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_NOLOAD);
+        let egl = libc::dlopen(c"libEGL.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        if epoxy.is_null() || egl.is_null() {
+            return;
+        }
+        let slot = libc::dlsym(epoxy, c"epoxy_eglChooseConfig".as_ptr()) as *mut usize;
+        let real = libc::dlsym(egl, c"eglChooseConfig".as_ptr());
+        if slot.is_null() || real.is_null() {
+            return;
+        }
+        let _ = REAL_CHOOSE.set(real as usize);
+        *slot = choose_config as ChooseConfig as usize;
+    });
+}
+
 impl Web {
     /// None when WebKitGTK 6 is not installed.
     pub fn new() -> Option<Web> {
         let api = api()?;
+        fix_egl_configs();
         unsafe {
             let ctx = (api.webkit_web_context_get_default)();
             if !ctx.is_null() {
@@ -167,8 +230,10 @@ impl Web {
             }
             let widget: gtk::Widget = from_glib_none(raw as *mut gtk::ffi::GtkWidget);
             let settings = (api.webkit_web_view_get_settings)(raw);
-            // CPU rendering, like the rest of docview: no GPU process or driver memory.
-            (api.webkit_settings_set_hardware_acceleration_policy)(settings, 1);
+            // 0 = always, 1 = never. GPU compositing scrolls smoothly (see `lean_env`);
+            // without GL (the `gpu = false` config) WebKit paints on the CPU.
+            let gpu = *crate::WEB_GPU.get().unwrap_or(&true);
+            (api.webkit_settings_set_hardware_acceleration_policy)(settings, if gpu { 0 } else { 1 });
             (api.webkit_settings_set_enable_back_forward_navigation_gestures)(settings, 1);
             let so: glib::Object = from_glib_none(settings as *mut glib::gobject_ffi::GObject);
             for name in SETTINGS_OFF {

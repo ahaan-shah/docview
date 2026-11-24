@@ -88,9 +88,17 @@ examples/make_sample.rs   generates the test / screenshot PDF
   signals go through plain GObject calls. The view is created on the first HTML open and
   destroyed (its web process exits) when a PDF opens. `applies(id, kind)` in app.rs decides which
   top-bar buttons and palette entries show; `App::run_web` handles commands for pages. Plain keys
-  go to the page. `lean_env` sets `__EGL_VENDOR_LIBRARY_FILENAMES=/dev/null` so WebKit does not
-  load GPU drivers + LLVM into docview (~55 MB); launch other programs with `launch_uri` /
-  `spawn_self`, which remove docview's env overrides.
+  go to the page. **Web scrolling is only smooth with GPU compositing** (threads `Core: Scrolling`
+  and `ThreadedCompositor` in WebKitWebProcess); WebKit enables it only when GTK has GL, else it
+  repaints on the CPU per scroll step (stutters at 120 Hz). So `lean_env` leaves GDK GL on (GTK
+  initializes it lazily: PDFs never load Mesa GL) and limits EGL to Mesa's vendor file (no
+  NVIDIA); cost ~25 MB in docview + ~25 MB in the web process. GTK 4.24 picks EGL configs
+  without `EGL_RENDERABLE_TYPE` (= GLES1), which Mesa 26.3 no longer offers, so GTK GL fails
+  everywhere ("No EGL configuration available"); `web::fix_egl_configs` swaps libepoxy's
+  `epoxy_eglChooseConfig` pointer for a wrapper that adds the type. Hidden-workspace windows are
+  suspended, so WebKit does not paint there: web scroll smoothness cannot be measured on ws9;
+  check the threads instead. Launch other programs with `launch_uri` / `spawn_self`, which
+  remove docview's env overrides.
   Pages are local-only and offline: `Web::new` points WebKit's network session at a refusing proxy
   (`NO_NETWORK_PROXY`, so no fetch / images / websockets / beacons), turns off WebRTC (UDP would
   bypass the proxy) and other `SETTINGS_OFF`, and denies permission requests. `connect_links`
